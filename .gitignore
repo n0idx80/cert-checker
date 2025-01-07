@@ -21,3 +21,5 @@ var/
 venv/
 .env
 *.xlsx
+*.txt
+
