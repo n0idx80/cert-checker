@@ -8,14 +8,16 @@ import argparse
 
 # Function to query crt.sh for a domain
 def query_crtsh(domain):
+    print(f"Starting crt.sh query for {domain}...", flush=True)
     url = f"https://crt.sh/?q={domain}&output=json"
-    response = requests.get(url)
-    if response.status_code == 200:
-        try:
-            return json.loads(response.text)
-        except json.JSONDecodeError:
-            return []
-    else:
+    
+    try:
+        response = requests.get(url, timeout=10)  # Add timeout
+        response.raise_for_status()
+        print(f"Successfully queried crt.sh for {domain}", flush=True)
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error querying crt.sh for {domain}: {str(e)}", flush=True)
         return []
 
 # Function to process a single domain

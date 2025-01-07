@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from crt_checker import process_domain
 import json
+import sys
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -51,77 +53,56 @@ def index():
 
 @app.route('/check_certificates', methods=['POST', 'GET'])
 def check_certificates():
-    print(f"Request method: {request.method}")  # Debug log
-    
     if request.method == 'GET':
-        # Initial SSE connection
-        def generate():
-            print("Establishing SSE connection")  # Debug log
-            yield "data: {\"status\": \"connected\"}\n\n"
-        return Response(generate(), mimetype='text/event-stream')
+        return jsonify({'error': 'POST method required'}), 405
     
-    # Handle POST request
-    global current_results
-    print("Processing POST request")  # Debug log
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
     
-    try:
-        if 'file' not in request.files:
-            print("No file in request")  # Debug log
-            return jsonify({'error': 'No file uploaded'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            print("Empty filename")  # Debug log
-            return jsonify({'error': 'No file selected'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
 
+    try:
         # Read domains from uploaded file
-        try:
-            domains = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
-            print(f"Found {len(domains)} domains to process")  # Debug log
-        except Exception as e:
-            print(f"Error reading file: {str(e)}")  # Debug log
-            return jsonify({'error': f'Error reading file: {str(e)}'}), 400
+        domains = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
+        print(f"Found {len(domains)} domains to process")
         
         def generate():
-            try:
-                current_results.clear()
-                total_domains = len(domains)
-                processed = 0
-                
-                # Process domains and collect results
-                for domain in domains:
-                    try:
-                        print(f"Processing domain: {domain}")  # Debug log
-                        results = process_domain(domain)
-                        current_results.extend(results)
-                        processed += 1
-                        
-                        # Send progress update
-                        progress = {
-                            'progress': (processed / total_domains) * 100,
-                            'current_domain': domain,
-                            'processed': processed,
-                            'total': total_domains
-                        }
-                        yield f"data: {json.dumps(progress)}\n\n"
-                    except Exception as e:
-                        print(f"Error processing domain {domain}: {str(e)}")  # Debug log
-                        # Continue processing other domains
-                        continue
-                
-                print("Processing complete")  # Debug log
-                # Send final results
-                yield f"data: {json.dumps({'complete': True, 'results': current_results})}\n\n"
-                
-            except Exception as e:
-                print(f"Error in generate: {str(e)}")  # Debug log
-                yield f"data: {json.dumps({'error': f'Processing error: {str(e)}'})}\n\n"
+            current_results = []
+            total_domains = len(domains)
+            processed = 0
+            
+            for domain in domains:
+                try:
+                    print(f"Processing domain: {domain}", flush=True)  # Debug log with flush
+                    results = process_domain(domain)
+                    current_results.extend(results)
+                    processed += 1
+                    
+                    # Send progress update
+                    progress = {
+                        'progress': (processed / total_domains) * 100,
+                        'current_domain': domain,
+                        'processed': processed,
+                        'total': total_domains
+                    }
+                    yield f"data: {json.dumps(progress)}\n\n"
+                    sys.stdout.flush()  # Force flush stdout
+                    
+                except Exception as e:
+                    print(f"Error processing domain {domain}: {str(e)}", flush=True)
+                    continue
+            
+            # Send final results
+            yield f"data: {json.dumps({'complete': True, 'results': current_results})}\n\n"
+            sys.stdout.flush()
     
         return Response(generate(), mimetype='text/event-stream')
         
     except Exception as e:
-        print(f"Error in main handler: {str(e)}")  # Debug log
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        print(f"Error in main handler: {str(e)}", flush=True)
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/export_results')
 def export_results():
