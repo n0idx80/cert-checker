@@ -51,7 +51,7 @@ async def validate_domains_async(domains):
 def index():
     return render_template('index.html')
 
-@app.route('/check_certificates', methods=['POST', 'GET'])
+@app.route('/check_certificates', methods=['POST'])
 def check_certificates():
     if request.method == 'GET':
         return jsonify({'error': 'POST method required'}), 405
@@ -103,6 +103,30 @@ def check_certificates():
     except Exception as e:
         print(f"Error in main handler: {str(e)}", flush=True)
         return jsonify({'error': str(e)}), 500
+
+    if all_results:
+        # Calculate summary statistics
+        df = pd.DataFrame(all_results)
+        total_certs = len(df)
+        status_counts = df['Status'].value_counts()
+        
+        summary_data = {
+            'total_domains': len(domains),
+            'domains_with_certs': domains_with_findings,
+            'total_certificates': total_certs,
+            'valid_certs': status_counts.get('Valid', 0),
+            'expiring_soon': status_counts.get('Expiring Soon', 0),
+            'expired': status_counts.get('Expired', 0),
+            'not_yet_valid': status_counts.get('Not Yet Valid', 0)
+        }
+        
+        return jsonify({
+            'success': True,
+            'results': all_results,
+            'summary': summary_data
+        })
+    else:
+        return jsonify({'success': False, 'error': 'No results found'})
 
 @app.route('/export_results')
 def export_results():

@@ -96,7 +96,7 @@ Examples:
     parser.add_argument(
         '-v', '--version',
         action='version',
-        version='Certificate Checker v1.0.0'
+        version='Certificate Checker v1.0.1'
     )
 
     return parser.parse_args()
@@ -141,7 +141,38 @@ def main():
     # Save the results to the specified Excel file
     if all_results:
         df = pd.DataFrame(all_results)
-        df.to_excel(args.output, index=False)
+        
+        # Calculate summary statistics
+        total_certs = len(df)
+        status_counts = df['Status'].value_counts()
+        valid_certs = status_counts.get('Valid', 0)
+        expiring_soon = status_counts.get('Expiring Soon', 0)
+        expired = status_counts.get('Expired', 0)
+        not_yet_valid = status_counts.get('Not Yet Valid', 0)
+        
+        # Create summary data
+        summary_data = [
+            ['Certificate Scan Summary'],
+            [f'Total Domains Scanned: {len(domains)}'],
+            [f'Domains with Certificates: {domains_with_findings}'],
+            [f'Total Certificates Found: {total_certs}'],
+            [''],
+            ['Certificate Status Breakdown:'],
+            [f'Valid Certificates: {valid_certs}'],
+            [f'Expiring Soon: {expiring_soon}'],
+            [f'Expired: {expired}'],
+            [f'Not Yet Valid: {not_yet_valid}'],
+            [''],  # Empty row before the main data
+        ]
+        
+        # Create a new Excel writer
+        with pd.ExcelWriter(args.output, engine='openpyxl') as writer:
+            # Write summary at the top
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_excel(writer, index=False, header=False, sheet_name='Sheet1')
+            
+            # Write main data below summary
+            df.to_excel(writer, index=False, startrow=len(summary_data), sheet_name='Sheet1')
         print(f"Results saved to {args.output}")
     else:
         print("No expired or soon-to-expire certificates found.")
