@@ -20,10 +20,11 @@ def query_crtsh(domain):
 
 # Function to process a single domain
 def process_domain(domain):
-    current_date = datetime.utcnow()  # Move this inside the function
+    current_date = datetime.utcnow()
     print(f"Checking {domain}...")
     results = []
     certs = query_crtsh(domain)
+    
     for cert in certs:
         not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
         not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
@@ -31,23 +32,32 @@ def process_domain(domain):
         # Calculate days until expiration (negative if expired)
         days_until_expiry = (not_after - current_date).days
         
-        # Determine status and only add if expired or expiring soon
-        if days_until_expiry < 0:
+        # Check if certificate is currently valid (not before current date)
+        is_not_before_valid = not_before <= current_date
+        
+        # Determine status based on expiry and validity period
+        if not is_not_before_valid:
+            status = "Not Yet Valid"
+            days_status = f"Becomes valid in {(not_before - current_date).days} days"
+        elif days_until_expiry < 0:
             status = "Expired"
             days_status = f"Expired {abs(days_until_expiry)} days ago"
         elif days_until_expiry <= 90:
             status = "Expiring Soon"
             days_status = f"Expires in {days_until_expiry} days"
         else:
-            continue  # Skip certificates that aren't expired or expiring soon
+            status = "Valid"
+            days_status = f"Expires in {days_until_expiry} days"
 
         results.append({
             'Domain': cert['name_value'],
             'Issuer': cert['issuer_name'],
             'Status': status,
             'Time Until Expiry': days_status,
-            'Expiration Date': not_after.strftime('%Y-%m-%d')
+            'Expiration Date': not_after.strftime('%Y-%m-%d'),
+            'Valid From': not_before.strftime('%Y-%m-%d')
         })
+    
     return results
 
 def parse_arguments():
