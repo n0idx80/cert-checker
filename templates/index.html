@@ -493,6 +493,71 @@
 
         // Add click handler for the HTML export button
         $('#exportHtmlButton').on('click', exportToHtml);
+
+        function exportToExcel() {
+            // Get the table data
+            const table = document.getElementById('resultsTable');
+            let data = [];
+            
+            // Add summary data
+            data.push(['Certificate Scan Summary']);
+            data.push([`Total Domains Scanned: ${$('#total-domains').text()}`]);
+            data.push([`Domains with Certificates: ${$('#domains-with-certs').text()}`]);
+            data.push([`Total Certificates Found: ${$('#total-certificates').text()}`]);
+            data.push(['']);
+            data.push(['Certificate Status Breakdown:']);
+            data.push([`Valid Certificates: ${$('#valid-certs').text()}`]);
+            data.push([`Expiring Soon: ${$('#expiring-soon').text()}`]);
+            data.push([`Expired: ${$('#expired').text()}`]);
+            data.push([`Not Yet Valid: ${$('#not-yet-valid').text()}`]);
+            data.push(['']);
+            
+            // Get headers
+            const headers = [];
+            table.querySelectorAll('thead th').forEach(th => {
+                headers.push(th.textContent);
+            });
+            data.push(headers);
+            
+            // Get table data
+            table.querySelectorAll('tbody tr').forEach(tr => {
+                const row = [];
+                tr.querySelectorAll('td').forEach(td => {
+                    row.push(td.textContent);
+                });
+                data.push(row);
+            });
+            
+            // Create workbook and worksheet
+            const timestamp = new Date().toISOString().slice(0,19).replace(/[:]/g, '-');
+            
+            // Send data to server for Excel creation
+            fetch('/export_excel', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    data: data,
+                    filename: `certificate-check-results-${timestamp}.xlsx`
+                })
+            })
+            .then(response => response.blob())
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `certificate-check-results-${timestamp}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        // Update the click handlers
+        $('#exportButton').on('click', exportToExcel);
     </script>
 </body>
 </html> 

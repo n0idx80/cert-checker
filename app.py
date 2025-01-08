@@ -10,11 +10,23 @@ from crt_checker import process_domain
 import json
 import sys
 from datetime import datetime
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+import uuid
+import atexit
+from io import BytesIO
 
 app = Flask(__name__)
 
 # Store results globally (you might want to use a proper database in production)
 current_results = []
+
+# Initialize scheduler with SQLite job store
+jobstores = {
+    'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
+}
+scheduler = BackgroundScheduler(jobstores=jobstores)
+scheduler.start()
 
 def is_valid_domain(domain):
     """Quick check if domain might be valid without making HTTP request"""
@@ -151,6 +163,117 @@ def export_results():
         as_attachment=True,
         download_name='certificate_results.xlsx'
     )
+
+@app.route('/schedule_scan', methods=['POST'])
+def schedule_scan():
+    try:
+        data = request.get_json()
+        
+        # Generate unique ID for the job
+        job_id = str(uuid.uuid4())
+        
+        # Parse schedule time
+        schedule_time = datetime.strptime(data['time'], '%H:%M').time()
+        
+        # Create the job based on frequency
+        if data['frequency'] == 'daily':
+            scheduler.add_job(
+                run_scheduled_scan,
+                'cron',
+                hour=schedule_time.hour,
+                minute=schedule_time.minute,
+                id=job_id,
+                replace_existing=True,
+                kwargs={'name': data['name']}
+            )
+        elif data['frequency'] == 'weekly':
+            scheduler.add_job(
+                run_scheduled_scan,
+                'cron',
+                day_of_week='mon',
+                hour=schedule_time.hour,
+                minute=schedule_time.minute,
+                id=job_id,
+                replace_existing=True,
+                kwargs={'name': data['name']}
+            )
+        elif data['frequency'] == 'monthly':
+            scheduler.add_job(
+                run_scheduled_scan,
+                'cron',
+                day=1,
+                hour=schedule_time.hour,
+                minute=schedule_time.minute,
+                id=job_id,
+                replace_existing=True,
+                kwargs={'name': data['name']}
+            )
+        
+        return jsonify({'success': True, 'job_id': job_id})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/scheduled_tasks', methods=['GET'])
+def get_scheduled_tasks():
+    jobs = scheduler.get_jobs()
+    tasks = []
+    
+    for job in jobs:
+        tasks.append({
+            'id': job.id,
+            'name': job.kwargs.get('name', 'Unnamed'),
+            'frequency': job.trigger.expression,
+            'time': f"{job.trigger.fields[3]}:{job.trigger.fields[4]}",
+            'next_run': job.next_run_time.strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
+    return jsonify({'success': True, 'tasks': tasks})
+
+@app.route('/scheduled_task/<task_id>', methods=['DELETE'])
+def delete_scheduled_task(task_id):
+    try:
+        scheduler.remove_job(task_id)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+def run_scheduled_scan(name):
+    # Implement the actual scan logic here
+    print(f"Running scheduled scan: {name}")
+    # You'll need to implement the actual scan functionality
+    pass
+
+# Make sure to stop the scheduler when the app stops
+@atexit.register
+def shutdown():
+    scheduler.shutdown()
+
+@app.route('/export_excel', methods=['POST'])
+def export_excel():
+    try:
+        data = request.json['data']
+        filename = request.json['filename']
+        
+        # Create Excel file in memory
+        output = BytesIO()
+        
+        # Create DataFrame and write to Excel
+        df = pd.DataFrame(data)
+        df.to_excel(output, index=False)
+        
+        # Seek to beginning of file
+        output.seek(0)
+        
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+    
+    except Exception as e:
+        print(f"Error in export_excel: {str(e)}")  # Add debugging
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True) 
