@@ -5,6 +5,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
         .status-bar {
@@ -45,6 +46,11 @@
                             File Upload
                         </button>
                     </li>
+                    <li class="nav-item">
+                        <button class="nav-link" id="scheduled-tab" data-bs-toggle="tab" data-bs-target="#scheduled" type="button" role="tab" aria-controls="scheduled" aria-selected="false">
+                            Scheduled Scans
+                        </button>
+                    </li>
                 </ul>
                 
                 <!-- Tab content -->
@@ -68,6 +74,47 @@
                             </div>
                             <button type="submit" class="btn btn-primary">Upload and Check</button>
                         </form>
+                    </div>
+                    
+                    <!-- Scheduled Scans tab content -->
+                    <div class="tab-pane fade" id="scheduled" role="tabpanel" aria-labelledby="scheduled-tab">
+                        <div class="card mt-3">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">Scheduled Scans</h5>
+                                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#scheduleModal">
+                                    <i class="fas fa-plus"></i> New Schedule
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Frequency</th>
+                                                <th>Time</th>
+                                                <th>Next Run</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="scheduledTasksTable">
+                                            <!-- Will be populated by loadScheduledTasks() -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Add new section for active scans -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <h5 class="mb-0">Active Scans</h5>
+                            </div>
+                            <div class="card-body" id="activeScans">
+                                <div class="no-active-scans text-muted">No scans currently running</div>
+                                <!-- Active scans will be inserted here -->
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -167,6 +214,57 @@
                             <label for="scheduleName" class="form-label">Schedule Name</label>
                             <input type="text" class="form-control" id="scheduleName" required>
                         </div>
+                        
+                        <!-- Update tab IDs and data attributes -->
+                        <ul class="nav nav-tabs mb-3" id="scheduleInputTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="manual-domains-tab" data-bs-toggle="tab" 
+                                        data-bs-target="#manual-domains" type="button" role="tab">
+                                    Manual Input
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="file-domains-tab" data-bs-toggle="tab" 
+                                        data-bs-target="#file-domains" type="button" role="tab">
+                                    File Upload
+                                </button>
+                            </li>
+                        </ul>
+                        
+                        <!-- Update tab content IDs -->
+                        <div class="tab-content" id="scheduleInputTabsContent">
+                            <div class="tab-pane fade show active" id="manual-domains" role="tabpanel">
+                                <div class="mb-3">
+                                    <label for="scheduleDomains" class="form-label">Domains to Scan</label>
+                                    <textarea class="form-control" id="scheduleDomains" rows="4"
+                                              placeholder="Enter domains (one per line)"></textarea>
+                                </div>
+                            </div>
+                            
+                            <div class="tab-pane fade" id="file-domains" role="tabpanel">
+                                <div class="mb-3">
+                                    <label for="scheduleDomainFile" class="form-label">Upload Domains File</label>
+                                    <div class="input-group">
+                                        <input type="file" class="form-control" id="scheduleDomainFile" accept=".txt">
+                                        <button class="btn btn-secondary" type="button" id="uploadDomainsButton">
+                                            Upload
+                                        </button>
+                                    </div>
+                                    <small class="text-muted">Upload a .txt file with one domain per line</small>
+                                    <div id="uploadedDomainsInfo" class="mt-2" style="display: none;">
+                                        <div class="alert alert-success">
+                                            <span id="uploadedDomainsCount">0</span> domains loaded successfully
+                                            <button type="button" class="btn-close float-end" aria-label="Close"></button>
+                                        </div>
+                                        <div class="border rounded p-2 bg-light">
+                                            <small class="text-muted">Preview:</small>
+                                            <div id="uploadedDomainsList" style="max-height: 100px; overflow-y: auto;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="mb-3">
                             <label for="scheduleFrequency" class="form-label">Frequency</label>
                             <select class="form-select" id="scheduleFrequency" required>
@@ -182,7 +280,22 @@
                     </form>
                 </div>
                 <div class="modal-body" id="scheduledTasksList">
-                    <!-- Scheduled tasks will be listed here -->
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Frequency</th>
+                                    <th>Time</th>
+                                    <th>Next Run</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Will be populated by loadScheduledTasks() -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -237,90 +350,194 @@
         });
 
         function updateResults(results) {
-            console.log("Updating results:", results);
+            console.log('Updating results:', results);
             
-            let statusCounts = {
-                'Valid': 0,
-                'Warning': 0,
-                'Expired': 0,
-                'Not Yet Valid': 0
-            };
+            // Make sure the summary section exists
+            let summarySection = document.getElementById('summary-section');
+            if (!summarySection) {
+                console.log('Creating summary section');
+                const resultsContainer = document.querySelector('#resultsContainer');
+                summarySection = document.createElement('div');
+                summarySection.id = 'summary-section';
+                resultsContainer.prepend(summarySection);
+            }
             
-            let issuerCounts = {};
-            
-            // Clear existing table rows
-            $('#resultsTable tbody').empty();
-            
-            // Show the summary section
-            $('#summary-section').show();
-            
-            // Update summary counts
-            $('#total-domains').text(results.length);
-            let domainsWithCerts = results.filter(r => r.Status).length;
-            $('#domains-with-certs').text(domainsWithCerts);
-            $('#total-certificates').text(results.length);
-            
-            results.forEach(result => {
-                // Update status counts
-                if (result.Status === 'Valid') statusCounts['Valid']++;
-                else if (result.Status === 'Expiring Soon') statusCounts['Warning']++;
-                else if (result.Status === 'Expired') statusCounts['Expired']++;
-                else if (result.Status === 'Not Yet Valid') statusCounts['Not Yet Valid']++;
+            // Show summary section
+            summarySection.style.display = 'block';
+
+            if (!results || results.length === 0) {
+                console.log('No results to display');
+                summarySection.innerHTML = `
+                    <div class="alert alert-info" role="alert">
+                        <h4 class="alert-heading">Scan Complete</h4>
+                        <p>No certificate results were found for the scanned domains.</p>
+                        <hr>
+                        <p class="mb-0">This might be because the domains were invalid or unreachable. Please verify your domain list and try again.</p>
+                    </div>
+                `;
                 
-                // Update issuer counts
-                if (result.Issuer) {
-                    issuerCounts[result.Issuer] = (issuerCounts[result.Issuer] || 0) + 1;
+                const tbody = document.querySelector('#resultsTable tbody');
+                if (tbody) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="text-center text-muted">
+                                <i class="fas fa-info-circle me-2"></i>No results available
+                            </td>
+                        </tr>
+                    `;
                 }
                 
-                // Add row to table
-                $('#resultsTable tbody').append(`
-                    <tr class="${getStatusClass(result.Status)}">
-                        <td>${result.Domain}</td>
-                        <td>${result.Status}</td>
-                        <td>${result.Issuer || 'N/A'}</td>
-                        <td>${result['Time Until Expiry'] || 'N/A'}</td>
-                        <td>${result['Expiration Date'] || 'N/A'}</td>
-                    </tr>
-                `);
-            });
-            
-            // Update status summary
-            $('#valid-certs').text(statusCounts['Valid']);
-            $('#expiring-soon').text(statusCounts['Warning']);
-            $('#expired').text(statusCounts['Expired']);
-            $('#not-yet-valid').text(statusCounts['Not Yet Valid']);
-            
-            // Update charts
-            statusChart.data.datasets[0].data = Object.values(statusCounts);
-            statusChart.update();
-            
-            // Update Issuer Chart
-            const sortedIssuers = Object.entries(issuerCounts)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 10);
-            
-            issuerChart.data.labels = sortedIssuers.map(item => item[0]);
-            issuerChart.data.datasets[0].data = sortedIssuers.map(item => item[1]);
-            issuerChart.update();
-            
-            // Show export buttons
-            $('#exportButton').show();
-            $('#exportHtmlButton').show();
+                if (window.certStatusChart) {
+                    window.certStatusChart.data.datasets[0].data = [0, 0, 0];
+                    window.certStatusChart.update();
+                }
+                
+                return;
+            }
+
+            // Calculate statistics
+            const total = results.length;
+            const valid = results.filter(r => r.valid).length;
+            const expiring = results.filter(r => r.expiring).length;
+            const expired = results.filter(r => r.expired).length;
+
+            console.log('Statistics:', { total, valid, expiring, expired });
+
+            // Update or create pie chart
+            const chartCanvas = document.getElementById('certStatusChart');
+            if (chartCanvas) {
+                if (window.certStatusChart) {
+                    window.certStatusChart.destroy();
+                }
+                
+                window.certStatusChart = new Chart(chartCanvas, {
+                    type: 'pie',
+                    data: {
+                        labels: ['Valid', 'Expiring Soon', 'Expired'],
+                        datasets: [{
+                            data: [valid, expiring, expired],
+                            backgroundColor: ['#28a745', '#ffc107', '#dc3545']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Update results table with export buttons
+            const resultsContainer = document.getElementById('resultsContainer');
+            if (resultsContainer) {
+                // Add export buttons
+                const exportButtons = `
+                    <div class="mb-3">
+                        <button class="btn btn-secondary me-2" onclick="exportToCSV()">
+                            <i class="fas fa-file-csv me-2"></i>Export to CSV
+                        </button>
+                        <button class="btn btn-secondary" onclick="exportToPDF()">
+                            <i class="fas fa-file-pdf me-2"></i>Export to PDF
+                        </button>
+                    </div>
+                `;
+                
+                // Update table
+                resultsContainer.innerHTML = `
+                    ${exportButtons}
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover" id="resultsTable">
+                            <thead>
+                                <tr>
+                                    <th>Domain</th>
+                                    <th>Issuer</th>
+                                    <th>Valid From</th>
+                                    <th>Valid Until</th>
+                                    <th>Days Remaining</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${results.map(result => `
+                                    <tr class="${getStatusClass(result)}">
+                                        <td>${result.domain}</td>
+                                        <td>${result.issuer}</td>
+                                        <td>${result.valid_from}</td>
+                                        <td>${result.valid_until}</td>
+                                        <td>${result.days_remaining}</td>
+                                        <td>${getStatusBadge(result)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
         }
 
-        function getStatusClass(status) {
-            switch(status) {
-                case 'Valid':
-                    return 'table-success';
-                case 'Expiring Soon':
-                    return 'table-warning';
-                case 'Expired':
-                    return 'table-danger';
-                case 'Not Yet Valid':
-                    return 'table-info';
-                default:
-                    return '';
-            }
+        // Add export functions
+        function exportToCSV() {
+            const results = Array.from(document.querySelectorAll('#resultsTable tbody tr')).map(row => {
+                const cells = Array.from(row.cells);
+                return {
+                    domain: cells[0].textContent,
+                    issuer: cells[1].textContent,
+                    validFrom: cells[2].textContent,
+                    validUntil: cells[3].textContent,
+                    daysRemaining: cells[4].textContent,
+                    status: cells[5].textContent.trim()
+                };
+            });
+
+            const csvContent = [
+                ['Domain', 'Issuer', 'Valid From', 'Valid Until', 'Days Remaining', 'Status'].join(','),
+                ...results.map(r => [
+                    r.domain,
+                    r.issuer,
+                    r.validFrom,
+                    r.validUntil,
+                    r.daysRemaining,
+                    r.status
+                ].join(','))
+            ].join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'certificate_scan_results.csv';
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+
+        function exportToPDF() {
+            const element = document.getElementById('resultsTable');
+            html2pdf()
+                .set({
+                    margin: 1,
+                    filename: 'certificate_scan_results.pdf',
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2 },
+                    jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' }
+                })
+                .from(element)
+                .save();
+        }
+
+        // Helper functions for status display
+        function getStatusClass(result) {
+            if (result.expired) return 'table-danger';
+            if (result.expiring) return 'table-warning';
+            return 'table-success';
+        }
+
+        function getStatusBadge(result) {
+            if (result.expired) return '<span class="badge bg-danger">Expired</span>';
+            if (result.expiring) return '<span class="badge bg-warning">Expiring Soon</span>';
+            return '<span class="badge bg-success">Valid</span>';
         }
 
         function processDomainsWithProgress(formData) {
@@ -396,6 +613,20 @@
 
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
+            
+            // Show progress bar
+            $('#statusBar').show();
+            $('#progressBar')
+                .css('width', '0%')
+                .text('0%')
+                .removeClass('bg-danger')
+                .addClass('progress-bar-striped progress-bar-animated');
+            $('#statusText').text('Processing domains...');
+            
+            // Clear previous results
+            $('#summary-section').hide();
+            $('#resultsTable tbody').empty();
+
             processDomainsWithProgress(formData);
         });
 
@@ -419,24 +650,33 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        const tasksList = document.getElementById('scheduledTasksList');
-                        tasksList.innerHTML = '<h6>Scheduled Tasks:</h6>';
+                        const tbody = document.getElementById('scheduledTasksTable');
+                        tbody.innerHTML = '';
+                        
                         if (data.tasks.length === 0) {
-                            tasksList.innerHTML += '<p>No scheduled tasks</p>';
+                            tbody.innerHTML = `
+                                <tr>
+                                    <td colspan="5" class="text-center">No scheduled tasks</td>
+                                </tr>
+                            `;
                             return;
                         }
-                        const ul = document.createElement('ul');
-                        ul.className = 'list-group';
+                        
                         data.tasks.forEach(task => {
-                            const li = document.createElement('li');
-                            li.className = 'list-group-item d-flex justify-content-between align-items-center';
-                            li.innerHTML = `
-                                ${task.name} - ${task.frequency} at ${task.time}
-                                <button class="btn btn-danger btn-sm" onclick="deleteTask('${task.id}')">Delete</button>
+                            tbody.innerHTML += `
+                                <tr>
+                                    <td>${task.name}</td>
+                                    <td>${task.frequency}</td>
+                                    <td>${task.time}</td>
+                                    <td>${task.next_run}</td>
+                                    <td>
+                                        <button class="btn btn-danger btn-sm" onclick="deleteTask('${task.id}')">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
                             `;
-                            ul.appendChild(li);
                         });
-                        tasksList.appendChild(ul);
                     }
                 })
                 .catch(error => console.error('Error loading scheduled tasks:', error));
@@ -455,11 +695,100 @@
                 .catch(error => console.error('Error deleting task:', error));
         }
 
-        // Add event listeners for scheduling
-        document.getElementById('saveSchedule').addEventListener('click', function() {
+        // Store uploaded domains globally
+        let uploadedDomains = [];
+
+        // Handle the upload button click
+        document.getElementById('uploadDomainsButton').addEventListener('click', async function() {
+            const fileInput = document.getElementById('scheduleDomainFile');
+            if (fileInput.files.length === 0) {
+                alert('Please select a file first');
+                return;
+            }
+
+            try {
+                const file = fileInput.files[0];
+                const text = await file.text();
+                uploadedDomains = text.split('\n').filter(d => d.trim());
+                
+                if (uploadedDomains.length === 0) {
+                    alert('No valid domains found in file');
+                    return;
+                }
+
+                // Show the upload info
+                document.getElementById('uploadedDomainsCount').textContent = uploadedDomains.length;
+                
+                // Show preview of domains
+                const previewList = document.getElementById('uploadedDomainsList');
+                previewList.innerHTML = uploadedDomains
+                    .slice(0, 5) // Show first 5 domains
+                    .map(domain => `<div>${domain}</div>`)
+                    .join('') + 
+                    (uploadedDomains.length > 5 ? `<div class="text-muted">...and ${uploadedDomains.length - 5} more</div>` : '');
+                
+                document.getElementById('uploadedDomainsInfo').style.display = 'block';
+            } catch (error) {
+                console.error('Error reading file:', error);
+                alert('Error reading file');
+            }
+        });
+
+        // Handle closing the upload info
+        document.querySelector('#uploadedDomainsInfo .btn-close').addEventListener('click', function() {
+            document.getElementById('uploadedDomainsInfo').style.display = 'none';
+        });
+
+        // Update the save button handler to use uploadedDomains when in file mode
+        document.getElementById('saveSchedule').addEventListener('click', async function() {
             const name = document.getElementById('scheduleName').value;
             const frequency = document.getElementById('scheduleFrequency').value;
             const time = document.getElementById('scheduleTime').value;
+            let domains = [];
+
+            // Add debug logging
+            console.log('Name:', name);
+            console.log('Frequency:', frequency);
+            console.log('Time:', time);
+
+            // Check which tab is active
+            const isFileUpload = document.querySelector('#file-domains.active') !== null;
+            console.log('Is file upload:', isFileUpload);
+            
+            if (isFileUpload) {
+                if (uploadedDomains.length === 0) {
+                    alert('Please upload a file with domains first');
+                    return;
+                }
+                domains = uploadedDomains;
+            } else {
+                const manualDomains = document.getElementById('scheduleDomains').value;
+                if (!manualDomains.trim()) {
+                    alert('Please enter at least one domain');
+                    return;
+                }
+                domains = manualDomains.split('\n').filter(d => d.trim());
+            }
+
+            console.log('Domains:', domains); // Debug log
+
+            // Update validation check
+            if (!name) {
+                alert('Please enter a schedule name');
+                return;
+            }
+            if (domains.length === 0) {
+                alert('Please provide at least one domain');
+                return;
+            }
+            if (!frequency) {
+                alert('Please select a frequency');
+                return;
+            }
+            if (!time) {
+                alert('Please select a time');
+                return;
+            }
 
             fetch('/schedule_scan', {
                 method: 'POST',
@@ -468,6 +797,7 @@
                 },
                 body: JSON.stringify({
                     name: name,
+                    domains: domains,
                     frequency: frequency,
                     time: time
                 })
@@ -475,9 +805,19 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    console.log('Scan scheduled with job ID:', data.job_id); // Debug log
+                    
+                    // Start monitoring the scan progress with the returned job ID
+                    setupScanProgress(data.job_id, name);
+                    
                     alert('Scan scheduled successfully!');
                     loadScheduledTasks();
+                    
+                    // Reset form and close modal
                     document.getElementById('scheduleForm').reset();
+                    uploadedDomains = [];
+                    document.getElementById('uploadedDomainsInfo').style.display = 'none';
+                    bootstrap.Modal.getInstance(document.getElementById('scheduleModal')).hide();
                 } else {
                     alert('Failed to schedule scan: ' + data.error);
                 }
@@ -486,6 +826,12 @@
                 console.error('Error:', error);
                 alert('Failed to schedule scan');
             });
+        });
+
+        // Clear uploaded domains when modal is hidden
+        document.getElementById('scheduleModal').addEventListener('hidden.bs.modal', function () {
+            uploadedDomains = [];
+            document.getElementById('uploadedDomainsInfo').style.display = 'none';
         });
 
         // Load scheduled tasks when the modal is opened
@@ -555,6 +901,151 @@
 
         // Update the click handlers
         $('#exportButton').on('click', exportToExcel);
+
+        // Call loadScheduledTasks when the page loads and when switching to the scheduled tab
+        document.addEventListener('DOMContentLoaded', loadScheduledTasks);
+        document.querySelector('#scheduled-tab').addEventListener('click', loadScheduledTasks);
+
+        // Add auto-refresh every minute for the scheduled tasks
+        setInterval(() => {
+            if (document.querySelector('#scheduled-tab').classList.contains('active')) {
+                loadScheduledTasks();
+            }
+        }, 60000);
+
+        // Store active scans
+        let activeScans = new Map();
+
+        // Function to update active scans display
+        function updateActiveScanDisplay() {
+            console.log('Updating active scans display. Current scans:', Array.from(activeScans.entries()));
+            const container = document.getElementById('activeScans');
+            if (!container) {
+                console.error('Active scans container not found!');
+                return;
+            }
+
+            if (activeScans.size === 0) {
+                container.innerHTML = '<div class="text-muted">No scans currently running</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+            activeScans.forEach((scan, scanId) => {
+                console.log(`Rendering progress for scan ${scanId}:`, scan);
+                container.innerHTML += `
+                    <div class="scan-progress mb-3" id="scan-${scanId}">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <strong>${scan.name}</strong>
+                            <span class="badge bg-primary">${scan.processed}/${scan.total} domains</span>
+                        </div>
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                 role="progressbar" 
+                                 style="width: ${scan.progress}%" 
+                                 aria-valuenow="${scan.progress}" 
+                                 aria-valuemin="0" 
+                                 aria-valuemax="100">
+                                ${Math.round(scan.progress)}%
+                            </div>
+                        </div>
+                        <small class="text-muted">Current domain: ${scan.currentDomain || 'N/A'}</small>
+                    </div>
+                `;
+            });
+        }
+
+        // Set up EventSource for scan progress
+        function setupScanProgress(scanId, scanName) {
+            console.log(`Setting up progress monitoring for scan: ${scanId}`);
+            const eventSource = new EventSource(`/scan_progress/${scanId}`);
+            
+            eventSource.onmessage = function(event) {
+                console.log('Progress update received:', event.data);
+                const data = JSON.parse(event.data);
+                
+                // Update active scans display
+                if (!data.complete) {
+                    activeScans.set(scanId, {
+                        name: scanName,
+                        progress: data.progress,
+                        processed: data.processed,
+                        total: data.total,
+                        currentDomain: data.current_domain
+                    });
+                    updateActiveScanDisplay();
+                    
+                    // Update results if available
+                    if (data.results && data.results.length > 0) {
+                        console.log(`Updating with ${data.results.length} results`);
+                        updateResults(data.results);
+                    }
+                } else {
+                    // Handle completion
+                    console.log('Scan complete:', scanId);
+                    eventSource.close();
+                    activeScans.delete(scanId);
+                    updateActiveScanDisplay();
+                    
+                    // Final results update
+                    if (data.results && data.results.length > 0) {
+                        console.log(`Final update with ${data.results.length} results`);
+                        updateResults(data.results);
+                    } else {
+                        console.log('No results in final update');
+                        updateResults([]);
+                    }
+                    
+                    // Show completion toast
+                    const toast = new bootstrap.Toast(document.getElementById('scanCompleteToast'));
+                    document.getElementById('scanCompleteName').textContent = scanName;
+                    toast.show();
+                }
+            };
+
+            eventSource.onerror = function(error) {
+                console.error('EventSource error:', error);
+                eventSource.close();
+                activeScans.delete(scanId);
+                updateActiveScanDisplay();
+            };
+        }
+
+        // Add toast for scan completion
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="toast-container position-fixed bottom-0 end-0 p-3">
+                <div id="scanCompleteToast" class="toast" role="alert">
+                    <div class="toast-header">
+                        <strong class="me-auto">Scan Complete</strong>
+                        <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+                    </div>
+                    <div class="toast-body">
+                        Scan "<span id="scanCompleteName"></span>" has completed.
+                    </div>
+                </div>
+            </div>
+        `);
+
+        // Update active scans every 30 seconds
+        setInterval(updateActiveScanDisplay, 30000);
+
+        // Make sure the active scans container exists and is visible
+        document.addEventListener('DOMContentLoaded', function() {
+            // Ensure the active scans container exists
+            const scheduledTab = document.getElementById('scheduled');
+            if (!scheduledTab.querySelector('#activeScans')) {
+                scheduledTab.insertAdjacentHTML('beforeend', `
+                    <div class="card mt-3">
+                        <div class="card-header">
+                            <h5 class="mb-0">Active Scans</h5>
+                        </div>
+                        <div class="card-body" id="activeScans">
+                            <div class="no-active-scans text-muted">No scans currently running</div>
+                        </div>
+                    </div>
+                `);
+            }
+        });
     </script>
 </body>
 
