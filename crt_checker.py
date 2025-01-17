@@ -1,24 +1,39 @@
 import requests
-import json
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import argparse
+import json
 
 # Function to query crt.sh for a domain
 def query_crtsh(domain):
     print(f"Starting crt.sh query for {domain}...", flush=True)
     url = f"https://crt.sh/?q={domain}&output=json"
     
+    # Create session with retry logic
+    session = requests.Session()
+    retries = Retry(
+        total=3,  # number of retries
+        backoff_factor=2,  # wait 2, 4, 8 seconds between retries
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"]  # Only retry on GET requests
+    )
+    session.mount('https://', HTTPAdapter(max_retries=retries))
+    
     try:
-        response = requests.get(url, timeout=10)  # Add timeout
+        # Increased timeout to 30 seconds
+        response = session.get(url, timeout=30)
         response.raise_for_status()
         print(f"Successfully queried crt.sh for {domain}", flush=True)
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error querying crt.sh for {domain}: {str(e)}", flush=True)
         return []
+    finally:
+        session.close()
 
 # Function to process a single domain
 def process_domain(domain):

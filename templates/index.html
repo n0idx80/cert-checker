@@ -350,7 +350,7 @@
         });
 
         function updateResults(results) {
-            console.log('Updating results:', results);
+            console.log('updateResults called with:', results);  // Debug log
             
             // Make sure the summary section exists
             let summarySection = document.getElementById('summary-section');
@@ -366,7 +366,7 @@
             summarySection.style.display = 'block';
 
             if (!results || results.length === 0) {
-                console.log('No results to display');
+                console.log('No results to display');  // Debug log
                 summarySection.innerHTML = `
                     <div class="alert alert-info" role="alert">
                         <h4 class="alert-heading">Scan Complete</h4>
@@ -375,34 +375,19 @@
                         <p class="mb-0">This might be because the domains were invalid or unreachable. Please verify your domain list and try again.</p>
                     </div>
                 `;
-                
-                const tbody = document.querySelector('#resultsTable tbody');
-                if (tbody) {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="6" class="text-center text-muted">
-                                <i class="fas fa-info-circle me-2"></i>No results available
-                            </td>
-                        </tr>
-                    `;
-                }
-                
-                if (window.certStatusChart) {
-                    window.certStatusChart.data.datasets[0].data = [0, 0, 0];
-                    window.certStatusChart.update();
-                }
-                
                 return;
             }
 
+            console.log(`Processing ${results.length} results`);  // Debug log
+            
             // Calculate statistics
             const total = results.length;
             const valid = results.filter(r => r.valid).length;
             const expiring = results.filter(r => r.expiring).length;
             const expired = results.filter(r => r.expired).length;
 
-            console.log('Statistics:', { total, valid, expiring, expired });
-
+            console.log('Statistics:', { total, valid, expiring, expired });  // Debug log
+            
             // Update or create pie chart
             const chartCanvas = document.getElementById('certStatusChart');
             if (chartCanvas) {
@@ -630,18 +615,88 @@
             processDomainsWithProgress(formData);
         });
 
-        $('#manualForm').on('submit', function(e) {
-            e.preventDefault();
-            const domains = $('#domainList').val();
-            if (!domains.trim()) {
-                alert('Please enter at least one domain');
-                return;
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('manualForm');
+            if (form) {
+                console.log('Found manual form');
+                form.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    console.log('Form submitted');
+                    
+                    const domains = document.getElementById('domainList').value;
+                    console.log('Domains to check:', domains);
+                    
+                    // Show progress bar
+                    const statusBar = document.getElementById('statusBar');
+                    statusBar.style.display = 'block';
+                    
+                    // Create FormData object
+                    const formData = new FormData();
+                    formData.append('domains', domains);
+                    
+                    // Log the FormData contents
+                    for (let pair of formData.entries()) {
+                        console.log('FormData entry:', pair[0], pair[1]);
+                    }
+                    
+                    fetch('/check_certificates', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        console.log('Response received:', response);
+                        return response.body.getReader();
+                    })
+                    .then(reader => {
+                        const decoder = new TextDecoder();
+                        
+                        function readStream() {
+                            return reader.read().then(({done, value}) => {
+                                if (done) {
+                                    console.log('Stream complete');
+                                    return;
+                                }
+                                
+                                const chunk = decoder.decode(value);
+                                console.log('Received chunk:', chunk);
+                                
+                                // Process the chunk
+                                const lines = chunk.split('\n');
+                                lines.forEach(line => {
+                                    if (line.startsWith('data: ')) {
+                                        try {
+                                            const data = JSON.parse(line.slice(6));
+                                            console.log('Processed data:', data);
+                                            
+                                            // Update progress
+                                            document.getElementById('progressBar').style.width = `${data.progress}%`;
+                                            document.getElementById('progressBar').textContent = `${Math.round(data.progress)}%`;
+                                            document.getElementById('statusText').textContent = 
+                                                `Processing ${data.current_domain} (${data.processed}/${data.total})`;
+                                            
+                                            if (data.results && data.results.length > 0) {
+                                                updateResults(data.results);
+                                            }
+                                        } catch (e) {
+                                            console.error('Error processing data:', e);
+                                        }
+                                    }
+                                });
+                                
+                                return readStream();
+                            });
+                        }
+                        
+                        return readStream();
+                    })
+                    .catch(error => {
+                        console.error('Fetch error:', error);
+                        document.getElementById('statusText').textContent = 'Error: ' + error.message;
+                    });
+                });
+            } else {
+                console.error('Manual form not found!');
             }
-
-            const blob = new Blob([domains], { type: 'text/plain' });
-            const formData = new FormData();
-            formData.append('file', blob, 'manual-input.txt');
-            processDomainsWithProgress(formData);
         });
 
         // Scheduling functionality
@@ -961,8 +1016,9 @@
             const eventSource = new EventSource(`/scan_progress/${scanId}`);
             
             eventSource.onmessage = function(event) {
-                console.log('Progress update received:', event.data);
+                console.log('Raw event data received:', event.data);
                 const data = JSON.parse(event.data);
+                console.log('Parsed progress data:', data);
                 
                 // Update active scans display
                 if (!data.complete) {
@@ -995,11 +1051,6 @@
                         console.log('No results in final update');
                         updateResults([]);
                     }
-                    
-                    // Show completion toast
-                    const toast = new bootstrap.Toast(document.getElementById('scanCompleteToast'));
-                    document.getElementById('scanCompleteName').textContent = scanName;
-                    toast.show();
                 }
             };
 
