@@ -350,118 +350,133 @@
         });
 
         function updateResults(results) {
-            console.log('updateResults called with:', results);  // Debug log
+            console.log('Updating results with:', results);
             
-            // Make sure the summary section exists
-            let summarySection = document.getElementById('summary-section');
-            if (!summarySection) {
-                console.log('Creating summary section');
-                const resultsContainer = document.querySelector('#resultsContainer');
-                summarySection = document.createElement('div');
-                summarySection.id = 'summary-section';
-                resultsContainer.prepend(summarySection);
+            // Get or create the main results container
+            let resultsContainer = document.getElementById('resultsContainer');
+            if (!resultsContainer) {
+                console.log('Creating results container');
+                resultsContainer = document.createElement('div');
+                resultsContainer.id = 'resultsContainer';
+                document.querySelector('.container').appendChild(resultsContainer);
             }
             
-            // Show summary section
-            summarySection.style.display = 'block';
-
+            // Clear any existing content
+            resultsContainer.innerHTML = '';
+            
             if (!results || results.length === 0) {
-                console.log('No results to display');  // Debug log
-                summarySection.innerHTML = `
-                    <div class="alert alert-info" role="alert">
-                        <h4 class="alert-heading">Scan Complete</h4>
-                        <p>No certificate results were found for the scanned domains.</p>
-                        <hr>
-                        <p class="mb-0">This might be because the domains were invalid or unreachable. Please verify your domain list and try again.</p>
-                    </div>
-                `;
+                resultsContainer.innerHTML = '<div class="alert alert-info">No certificates found.</div>';
                 return;
             }
-
-            console.log(`Processing ${results.length} results`);  // Debug log
             
             // Calculate statistics
             const total = results.length;
-            const valid = results.filter(r => r.valid).length;
+            const valid = results.filter(r => !r.expired && !r.expiring).length;
             const expiring = results.filter(r => r.expiring).length;
             const expired = results.filter(r => r.expired).length;
-
-            console.log('Statistics:', { total, valid, expiring, expired });  // Debug log
             
-            // Update or create pie chart
-            const chartCanvas = document.getElementById('certStatusChart');
-            if (chartCanvas) {
-                if (window.certStatusChart) {
-                    window.certStatusChart.destroy();
-                }
-                
-                window.certStatusChart = new Chart(chartCanvas, {
-                    type: 'pie',
-                    data: {
-                        labels: ['Valid', 'Expiring Soon', 'Expired'],
-                        datasets: [{
-                            data: [valid, expiring, expired],
-                            backgroundColor: ['#28a745', '#ffc107', '#dc3545']
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            legend: {
-                                position: 'bottom'
-                            }
-                        }
-                    }
-                });
-            }
+            console.log('Certificate statistics:', { total, valid, expiring, expired });
+            
+            // Create the card structure
+            let cardHTML = `
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">Domain Results</h5>
+                    </div>
+                    <div class="card-body">
+                        <!-- Chart Section -->
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <canvas id="certificateChart"></canvas>
+                            </div>
+                            <div class="col-md-6">
+                                <h6>Summary</h6>
+                                <ul class="list-unstyled">
+                                    <li>Total Certificates: ${total}</li>
+                                    <li>Valid: ${valid}</li>
+                                    <li>Expiring Soon: ${expiring}</li>
+                                    <li>Expired: ${expired}</li>
+                                </ul>
+                            </div>
+                        </div>
 
-            // Update results table with export buttons
-            const resultsContainer = document.getElementById('resultsContainer');
-            if (resultsContainer) {
-                // Add export buttons
-                const exportButtons = `
-                    <div class="mb-3">
-                        <button class="btn btn-secondary me-2" onclick="exportToCSV()">
-                            <i class="fas fa-file-csv me-2"></i>Export to CSV
-                        </button>
-                        <button class="btn btn-secondary" onclick="exportToPDF()">
-                            <i class="fas fa-file-pdf me-2"></i>Export to PDF
-                        </button>
-                    </div>
-                `;
-                
-                // Update table
-                resultsContainer.innerHTML = `
-                    ${exportButtons}
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover" id="resultsTable">
-                            <thead>
-                                <tr>
-                                    <th>Domain</th>
-                                    <th>Issuer</th>
-                                    <th>Valid From</th>
-                                    <th>Valid Until</th>
-                                    <th>Days Remaining</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${results.map(result => `
-                                    <tr class="${getStatusClass(result)}">
-                                        <td>${result.domain}</td>
-                                        <td>${result.issuer}</td>
-                                        <td>${result.valid_from}</td>
-                                        <td>${result.valid_until}</td>
-                                        <td>${result.days_remaining}</td>
-                                        <td>${getStatusBadge(result)}</td>
+                        <!-- Export Buttons -->
+                        <div class="mb-3">
+                            <button class="btn btn-primary me-2" onclick="exportToExcel()">Export to Excel</button>
+                            <button class="btn btn-primary" onclick="exportToPDF()">Export to PDF</button>
+                        </div>
+
+                        <!-- Results Table -->
+                        <div class="table-responsive">
+                            <table class="table table-striped" id="resultsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Domain</th>
+                                        <th>Issuer</th>
+                                        <th>Valid From</th>
+                                        <th>Valid Until</th>
+                                        <th>Days Remaining</th>
+                                        <th>Status</th>
                                     </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+            `;
+            
+            results.forEach(cert => {
+                const statusClass = cert.expired ? 'table-danger' : 
+                                  cert.expiring ? 'table-warning' : 
+                                  'table-success';
+                const statusBadge = cert.expired ? '<span class="badge bg-danger">Expired</span>' :
+                           cert.expiring ? '<span class="badge bg-warning">Expiring Soon</span>' :
+                           '<span class="badge bg-success">Valid</span>';
+                
+                cardHTML += `
+                    <tr class="${statusClass}">
+                        <td>${cert.domain || 'N/A'}</td>
+                        <td>${cert.issuer || 'N/A'}</td>
+                        <td>${cert.valid_from || 'N/A'}</td>
+                        <td>${cert.valid_until || 'N/A'}</td>
+                        <td>${cert.days_remaining !== undefined ? cert.days_remaining + ' days' : 'N/A'}</td>
+                        <td>${statusBadge}</td>
+                    </tr>
                 `;
+            });
+            
+            cardHTML += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Update the container with the new content
+    resultsContainer.innerHTML = cardHTML;
+    
+    // Create the pie chart
+    const ctx = document.getElementById('certificateChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: ['Valid', 'Expiring Soon', 'Expired'],
+            datasets: [{
+                data: [valid, expiring, expired],
+                backgroundColor: ['#28a745', '#ffc107', '#dc3545']
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                title: {
+                    display: true,
+                    text: 'Certificate Status Distribution'
+                }
             }
         }
+    });
+    
+    console.log('Results display updated');
+}
 
         // Add export functions
         function exportToCSV() {

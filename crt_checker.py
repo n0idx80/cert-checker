@@ -7,8 +7,33 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import argparse
 import json
+import socket
+import ssl
+import OpenSSL.crypto as crypto
 
-# Function to query crt.sh for a domain
+def get_cert_direct(domain, port=443):
+    """Directly get certificate from domain"""
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((domain, port), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=domain) as ssock:
+                cert_der = ssock.getpeercert(binary_form=True)
+                cert = crypto.load_certificate(crypto.FILETYPE_ASN1, cert_der)
+                
+                # Extract certificate information
+                issuer = dict(cert.get_issuer().get_components())
+                not_before = datetime.strptime(cert.get_notBefore().decode(), '%Y%m%d%H%M%SZ')
+                not_after = datetime.strptime(cert.get_notAfter().decode(), '%Y%m%d%H%M%SZ')
+                
+                return [{
+                    'issuer_name': issuer.get(b'O', b'Unknown').decode(),
+                    'not_before': not_before.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'not_after': not_after.strftime('%Y-%m-%dT%H:%M:%S')
+                }]
+    except Exception as e:
+        print(f"Error getting direct certificate for {domain}: {str(e)}")
+        return []
+
 def query_crtsh(domain):
     print(f"Starting crt.sh query for {domain}...", flush=True)
     url = f"https://crt.sh/?q={domain}&output=json"
@@ -16,26 +41,25 @@ def query_crtsh(domain):
     # Create session with retry logic
     session = requests.Session()
     retries = Retry(
-        total=3,  # number of retries
-        backoff_factor=2,  # wait 2, 4, 8 seconds between retries
+        total=5,  # increased retries
+        backoff_factor=1,  # wait 1, 2, 4, 8, 16 seconds between retries
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]  # Only retry on GET requests
+        allowed_methods=["GET"]
     )
     session.mount('https://', HTTPAdapter(max_retries=retries))
     
     try:
-        # Increased timeout to 30 seconds
         response = session.get(url, timeout=30)
         response.raise_for_status()
         print(f"Successfully queried crt.sh for {domain}", flush=True)
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Error querying crt.sh for {domain}: {str(e)}", flush=True)
-        return []
+        print(f"Error querying crt.sh for {domain}: {str(e)}")
+        print(f"Falling back to direct certificate check for {domain}")
+        return get_cert_direct(domain)
     finally:
         session.close()
 
-# Function to process a single domain
 def process_domain(domain):
     current_date = datetime.utcnow()
     print(f"Checking {domain}...")
@@ -43,37 +67,33 @@ def process_domain(domain):
     certs = query_crtsh(domain)
     
     for cert in certs:
-        not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
-        not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
-        
-        # Calculate days until expiration (negative if expired)
-        days_until_expiry = (not_after - current_date).days
-        
-        # Check if certificate is currently valid (not before current date)
-        is_not_before_valid = not_before <= current_date
-        
-        # Determine status based on expiry and validity period
-        if not is_not_before_valid:
-            status = "Not Yet Valid"
-            days_status = f"Becomes valid in {(not_before - current_date).days} days"
-        elif days_until_expiry < 0:
-            status = "Expired"
-            days_status = f"Expired {abs(days_until_expiry)} days ago"
-        elif days_until_expiry <= 90:
-            status = "Expiring Soon"
-            days_status = f"Expires in {days_until_expiry} days"
-        else:
-            status = "Valid"
-            days_status = f"Expires in {days_until_expiry} days"
-
-        results.append({
-            'Domain': cert['name_value'],
-            'Issuer': cert['issuer_name'],
-            'Status': status,
-            'Time Until Expiry': days_status,
-            'Expiration Date': not_after.strftime('%Y-%m-%d'),
-            'Valid From': not_before.strftime('%Y-%m-%d')
-        })
+        try:
+            not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
+            not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
+            
+            # Calculate days until expiration (negative if expired)
+            days_until_expiry = (not_after - current_date).days
+            
+            # Determine status
+            expired = days_until_expiry < 0
+            expiring = not expired and days_until_expiry <= 90
+            
+            result = {
+                'domain': domain,
+                'issuer': cert.get('issuer_name', 'Unknown'),
+                'valid_from': not_before.strftime('%Y-%m-%d'),
+                'valid_until': not_after.strftime('%Y-%m-%d'),
+                'days_remaining': days_until_expiry,
+                'expired': expired,
+                'expiring': expiring
+            }
+            
+            print(f"Processed cert for {domain}: {result}")  # Debug log
+            results.append(result)
+            
+        except Exception as e:
+            print(f"Error processing certificate for {domain}: {str(e)}")
+            continue
     
     return results
 
