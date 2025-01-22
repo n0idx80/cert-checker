@@ -477,6 +477,9 @@ def scan_certificates():
         temp_path = None
         process = None
         start_time = time.time()
+        batch_start_time = time.time()
+        batch_count = 0
+        total_certs = 0
         
         try:
             print("Creating temporary file...", flush=True)
@@ -528,6 +531,17 @@ def scan_certificates():
                     
                     # Send batch when it reaches size or is last item
                     if len(current_batch) >= BATCH_SIZE or processed == total_targets:
+                        batch_count += 1
+                        batch_elapsed = time.time() - batch_start_time
+                        total_certs += len(current_batch)
+                        
+                        print(f"\nBatch {batch_count} Statistics:", flush=True)
+                        print(f"- Batch size: {len(current_batch)} IPs", flush=True)
+                        print(f"- Certificates found: {len(current_batch)} total", flush=True)
+                        print(f"- Batch processing time: {batch_elapsed:.2f} seconds", flush=True)
+                        print(f"- Average time per IP: {batch_elapsed/len(current_batch):.3f} seconds", flush=True)
+                        print(f"- Total certificates so far: {total_certs}", flush=True)
+                        
                         progress = (processed / total_targets) * 100
                         update = {
                             'progress': progress,
@@ -538,21 +552,21 @@ def scan_certificates():
                         }
                         yield f'data: {json.dumps(update)}\n\n'
                         current_batch = []
+                        batch_start_time = time.time()
                         
                 except json.JSONDecodeError as e:
                     print(f"Error parsing scanner output: {e}", flush=True)
                     print(f"Problematic line: {line}", flush=True)
                     continue
                 
-            # Check for any stderr output
-            stderr_output = process.stderr.read()
-            if stderr_output:
-                print(f"Scanner stderr output: {stderr_output}", flush=True)
-            
+            # Final statistics
             total_time = time.time() - start_time
             print(f"\n=== Scan Complete ===", flush=True)
             print(f"Total time: {total_time:.2f} seconds", flush=True)
+            print(f"Total IPs processed: {processed}", flush=True)
+            print(f"Total certificates found: {total_certs}", flush=True)
             print(f"Average rate: {total_targets/total_time:.2f} IPs/sec", flush=True)
+            print(f"Average certificates per IP: {total_certs/processed:.2f}", flush=True)
             
         except Exception as e:
             print(f"Error in scan_certificates: {str(e)}", flush=True)
