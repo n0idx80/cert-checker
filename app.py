@@ -21,6 +21,7 @@ from urllib3.util.retry import Retry
 import os
 import subprocess
 import tempfile
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
@@ -464,29 +465,46 @@ def scan_certificates():
         print("\n=== Starting Certificate Scan ===", flush=True)
         print("Request method:", request.method, flush=True)
         print("Request form:", request.form, flush=True)
+        print("Request files:", request.files, flush=True)
         
         # Create temporary file for targets
         temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'targets.txt')
         
-        # Get targets from request
-        targets = request.form.get('targets', '')
-        if not targets:
-            return jsonify({'error': 'No targets provided'}), 400
-            
-        with open(temp_path, 'w') as f:
-            f.write(targets)
+        # Get targets from either file upload or text input
+        if 'file' in request.files:
+            print("Processing uploaded file", flush=True)
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No selected file'}), 400
+            if file:
+                filename = secure_filename(file.filename)
+                file.save(temp_path)
+                print(f"File saved to: {temp_path}", flush=True)
+        else:
+            print("Processing form data", flush=True)
+            targets = request.form.get('targets', '')
+            if not targets:
+                return jsonify({'error': 'No targets provided'}), 400
+            print(f"Received targets:\n{targets}", flush=True)
+            with open(temp_path, 'w') as f:
+                f.write(targets)
+            print("Targets written to temp file", flush=True)
         
         def generate():
             try:
                 # Count total targets
                 with open(temp_path, 'r') as f:
                     total_targets = sum(1 for line in f if line.strip())
+                print(f"Total targets to scan: {total_targets}", flush=True)
                 
                 scanner_path = './cert_scanner'
                 if not os.path.exists(scanner_path):
                     error_msg = f"Scanner not found at {scanner_path}"
+                    print(f"ERROR: {error_msg}", flush=True)
                     yield f'data: {{"error": "{error_msg}"}}\n\n'
                     return
+                
+                print(f"Running scanner with command: {scanner_path} {temp_path}", flush=True)
                 
                 process = subprocess.Popen(
                     [scanner_path, temp_path],
@@ -498,6 +516,7 @@ def scan_certificates():
                 
                 processed = 0
                 for line in process.stdout:
+                    print(f"Scanner output: {line.strip()}", flush=True)
                     try:
                         result = json.loads(line)
                         processed += 1
@@ -509,17 +528,25 @@ def scan_certificates():
                             'results': [result],
                             'complete': False
                         }
+                        print(f"Sending update: {json.dumps(update)}", flush=True)
                         yield f'data: {json.dumps(update)}\n\n'
                         
                     except json.JSONDecodeError as e:
                         print(f"Error parsing scanner output: {e}", flush=True)
+                        print(f"Problematic line: {line}", flush=True)
                         continue
+                
+                # Check for any stderr output
+                stderr_output = process.stderr.read()
+                if stderr_output:
+                    print(f"Scanner stderr output: {stderr_output}", flush=True)
                 
                 yield f'data: {{"progress": 100, "processed": {total_targets}, "total": {total_targets}, "complete": true}}\n\n'
                 
             finally:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
+                    print("Cleaned up temporary file", flush=True)
         
         return Response(generate(), mimetype='text/event-stream')
         

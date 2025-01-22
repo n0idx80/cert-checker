@@ -71,6 +71,11 @@
                                 <textarea class="form-control" id="inputData" rows="5" placeholder="Enter one IP or domain per line"></textarea>
                             </div>
                             
+                            <div class="mb-3">
+                                <label for="fileInput" class="form-label">Or upload a file (one IP/domain per line)</label>
+                                <input type="file" class="form-control" id="fileInput" accept=".txt,.csv,.list">
+                            </div>
+                            
                             <button type="submit" class="btn btn-primary">Scan Certificates</button>
                         </form>
 
@@ -420,15 +425,20 @@
             
             const formData = new FormData();
             const inputType = document.getElementById('inputType').value;
-            const inputData = document.getElementById('inputData').value;
+            const fileInput = document.getElementById('fileInput');
+            const textInput = document.getElementById('inputData');
             
-            if (!inputData.trim()) {
-                alert('Please enter at least one IP or domain');
+            // Check if we have a file or text input
+            if (fileInput.files.length > 0) {
+                formData.append('file', fileInput.files[0]);
+            } else if (textInput.value.trim()) {
+                formData.append('targets', textInput.value.trim());
+            } else {
+                alert('Please either enter targets or upload a file');
                 return;
             }
             
             formData.append('type', inputType);
-            formData.append('targets', inputData);
             
             try {
                 const response = await fetch('/scan_certificates', {
@@ -479,6 +489,20 @@
             } catch (error) {
                 statusText.textContent = `Error: ${error.message}`;
                 console.error('Scan error:', error);
+            }
+        });
+
+        // Add file input handler to clear textarea when file is selected
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                document.getElementById('inputData').value = '';
+            }
+        });
+
+        // Add textarea handler to clear file input when text is entered
+        document.getElementById('inputData').addEventListener('input', function(e) {
+            if (e.target.value.trim()) {
+                document.getElementById('fileInput').value = '';
             }
         });
 
