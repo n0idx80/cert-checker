@@ -233,18 +233,25 @@
                                     <!-- Results Section -->
                                     <div id="ctlResultsSection" style="display: none;" class="mt-4">
                                         <h4>Certificate Transparency Log Results</h4>
-                                        <div class="table-responsive">
-                                            <table id="ctlResultsTable" class="table table-striped">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Domain</th>
-                                                        <th>Certificates Found</th>
-                                                        <th>Latest Expiry</th>
-                                                        <th>Issuers</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody></tbody>
-                                            </table>
+                                        <div class="row mt-4">
+                                            <div class="col-md-8">
+                                                <table id="ctlResultsTable" class="table table-striped">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Domain</th>
+                                                            <th>Common Name</th>
+                                                            <th>Status</th>
+                                                            <th>Issuer</th>
+                                                            <th>Expiration Date</th>
+                                                            <th>Time Until Expiry</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody></tbody>
+                                                </table>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <canvas id="ctlPieChart"></canvas>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -1030,11 +1037,14 @@
 
         // Function to handle CT log queries (used by both forms)
         async function handleCTLQuery(formData) {
-            const progressSection = document.getElementById('ctlProgressSection');
-            const progressBar = document.getElementById('ctlProgressBar');
-            const statusText = document.getElementById('ctlStatusText');
-            progressSection.style.display = 'block';
-
+            const statusText = document.getElementById('ctlStatus') || document.createElement('div');
+            if (!document.getElementById('ctlStatus')) {
+                statusText.id = 'ctlStatus';
+                document.getElementById('ctlResultsSection').prepend(statusText);
+            }
+            
+            statusText.textContent = 'Starting CT Log query...';
+            
             try {
                 const response = await fetch('/query_ctl', {
                     method: 'POST',
@@ -1047,49 +1057,41 @@
                 while (true) {
                     const {value, done} = await reader.read();
                     if (done) break;
-
-                    const text = decoder.decode(value);
-                    const lines = text.split('\n');
-
+                    
+                    const lines = decoder.decode(value).split('\n');
                     for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                console.log('Received data:', line);
-                                const jsonStr = line.slice(6);
-                                console.log('Parsing JSON:', jsonStr);
-                                const data = JSON.parse(jsonStr);
-                                
-                                if (data.error) {
-                                    statusText.textContent = `Error: ${data.error}`;
-                                    console.error('Server reported error:', data.error);
-                                    return;
-                                }
-
-                                if (data.progress !== undefined) {
-                                    progressBar.style.width = `${data.progress}%`;
-                                    progressBar.textContent = `${Math.round(data.progress)}%`;
-                                    statusText.textContent = `Processing ${data.current_domain || ''}...`;
-                                }
-
-                                if (data.results && data.results.length > 0) {
-                                    console.log('Updating results with:', data.results);
-                                    updateCTLResults(data.results);
-                                }
-
-                                if (data.complete) {
-                                    statusText.textContent = 'CT Log query complete!';
-                                }
-                            } catch (e) {
-                                console.error('Error parsing CTL update:', e);
-                                console.error('Problematic line:', line);
-                                continue;
+                        if (!line.trim() || !line.startsWith('data: ')) continue;
+                        
+                        try {
+                            const jsonStr = line.substring(6);
+                            const data = JSON.parse(jsonStr);
+                            
+                            if (data.error) {
+                                statusText.textContent = `Error: ${data.error}`;
+                                return;
                             }
+
+                            statusText.textContent = `Processing domain ${data.current_domain} (${Math.round(data.progress)}%)`;
+                            
+                            if (data.results && data.results.length > 0) {
+                                updateCTLResults(data.results);
+                            }
+
+                            if (data.complete) {
+                                statusText.textContent = 'CT Log query complete!';
+                            }
+                        } catch (e) {
+                            // Only log if it's not a partial update
+                            if (line.includes('"complete":true')) {
+                                console.debug('Skipping partial update');
+                            }
+                            continue;
                         }
                     }
                 }
-            } catch (error) {
-                console.error('Error querying CT logs:', error);
-                statusText.textContent = `Error: ${error.message}`;
+            } catch (e) {
+                console.debug('Network or processing error:', e);
+                statusText.textContent = 'Query completed with some errors';
             }
         }
 
@@ -1125,20 +1127,77 @@
         });
 
         function updateCTLResults(results) {
-            const resultsSection = document.getElementById('ctlResultsSection');
-            resultsSection.style.display = 'block';
+            try {
+                const resultsSection = document.getElementById('ctlResultsSection');
+                resultsSection.style.display = 'block';
+                
+                const tbody = document.querySelector('#ctlResultsTable tbody');
+                
+                results.forEach(result => {
+                    const row = document.createElement('tr');
+                    try {
+                        row.innerHTML = `
+                            <td>${result.Domain || ''}</td>
+                            <td>${result['Common Name'] || ''}</td>
+                            <td>${result.Status || ''}</td>
+                            <td>${result.Issuer || ''}</td>
+                            <td>${result['Expiration Date'] || ''}</td>
+                            <td>${result['Days Until Expiry'] || ''}</td>
+                        `;
+                        tbody.appendChild(row);
+                    } catch (e) {
+                        console.debug('Skipping malformed result');
+                    }
+                });
+            } catch (e) {
+                console.debug('Error updating results table');
+            }
+        }
+        
+        function getStatusClass(status) {
+            switch(status) {
+                case 'Valid': return 'text-success';
+                case 'Expired': return 'text-danger';
+                case 'Expiring Soon': return 'text-warning';
+                case 'Not Yet Valid': return 'text-info';
+                default: return '';
+            }
+        }
+        
+        function createCTLPieChart(statusCounts) {
+            const ctx = document.getElementById('ctlPieChart').getContext('2d');
             
-            const tbody = document.querySelector('#ctlResultsTable tbody');
+            // Check if chart exists and is a Chart instance before destroying
+            if (window.ctlPieChart && typeof window.ctlPieChart.destroy === 'function') {
+                window.ctlPieChart.destroy();
+            }
             
-            results.forEach(result => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${result.domain}</td>
-                    <td>${result.cert_count}</td>
-                    <td>${result.latest_expiry || 'N/A'}</td>
-                    <td>${result.issuers.join(', ') || 'N/A'}</td>
-                `;
-                tbody.appendChild(row);
+            window.ctlPieChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(statusCounts),
+                    datasets: [{
+                        data: Object.values(statusCounts),
+                        backgroundColor: [
+                            '#28a745', // Valid - green
+                            '#dc3545', // Expired - red
+                            '#ffc107', // Expiring Soon - yellow
+                            '#17a2b8'  // Not Yet Valid - blue
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        },
+                        title: {
+                            display: true,
+                            text: 'Certificate Status Distribution'
+                        }
+                    }
+                }
             });
         }
 

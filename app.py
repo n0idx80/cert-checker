@@ -680,44 +680,56 @@ def query_ctl():
             
             for domain in domains:
                 try:
-                    print(f"Querying crt.sh for {domain}", flush=True)
+                    print(f"Processing domain: {domain}", flush=True)
                     session = create_session()
                     url = f"https://crt.sh/?q={domain}&output=json"
                     response = session.get(url, timeout=30)
                     response.raise_for_status()
                     
                     certs = response.json()
-                    print(f"Found {len(certs)} certificates in crt.sh for {domain}", flush=True)
                     
-                    # Group certificates by domain
-                    domain_result = {
-                        'domain': domain,
-                        'cert_count': len(certs),
-                        'latest_expiry': None,
-                        'issuers': set()  # Use set to avoid duplicates
-                    }
-                    
-                    # Process certificates for this domain
-                    latest_date = None
                     for cert in certs:
                         try:
                             not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
-                            if latest_date is None or not_after > latest_date:
-                                latest_date = not_after
-                                domain_result['latest_expiry'] = not_after.strftime('%Y-%m-%d')
+                            not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
+                            now = datetime.now()
+                            days_until_expiry = (not_after - now).days
                             
-                            domain_result['issuers'].add(cert['issuer_name'])
+                            if now > not_after:
+                                status = 'Expired'
+                            elif now < not_before:
+                                status = 'Not Yet Valid'
+                            else:
+                                if days_until_expiry <= 30:
+                                    status = 'Expiring Soon'
+                                else:
+                                    status = 'Valid'
+                            
+                            result = {
+                                'Domain': domain,
+                                'Common Name': cert.get('common_name', 'Unknown'),
+                                'Status': status,
+                                'Issuer': cert.get('issuer_name', 'Unknown'),
+                                'Expiration Date': not_after.strftime('%Y-%m-%d'),
+                                'Days Until Expiry': str(days_until_expiry)
+                            }
+                            all_results.append(result)
                             
                         except Exception as e:
                             print(f"Error processing certificate: {str(e)}", flush=True)
                             continue
                     
-                    # Convert issuers set to list for JSON serialization
-                    domain_result['issuers'] = list(domain_result['issuers'])
-                    all_results.append(domain_result)
-                    
                     processed += 1
                     progress = (processed / total) * 100
+                    
+                    # Calculate summary statistics for pie chart
+                    df = pd.DataFrame(all_results)
+                    status_counts = df['Status'].value_counts().to_dict() if not df.empty else {
+                        'Valid': 0,
+                        'Expiring Soon': 0,
+                        'Expired': 0,
+                        'Not Yet Valid': 0
+                    }
                     
                     update = {
                         'progress': progress,
@@ -725,7 +737,8 @@ def query_ctl():
                         'processed': processed,
                         'total': total,
                         'results': all_results,
-                        'complete': False
+                        'status_counts': status_counts,
+                        'complete': (processed == total)
                     }
                     
                     yield f"data: {json.dumps(update)}\n\n"
@@ -733,18 +746,6 @@ def query_ctl():
                 except Exception as e:
                     print(f"Error processing domain {domain}: {str(e)}", flush=True)
                     continue
-            
-            # Send final update
-            final_update = {
-                'progress': 100.0,
-                'current_domain': domains[-1] if domains else None,
-                'processed': total,
-                'total': total,
-                'results': all_results,
-                'complete': True
-            }
-            
-            yield f"data: {json.dumps(final_update)}\n\n"
             
         except Exception as e:
             print(f"Fatal error in CT log query: {str(e)}", flush=True)
