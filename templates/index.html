@@ -57,12 +57,67 @@
                 <div class="tab-content" id="inputTabsContent">
                     <!-- Manual Input Tab -->
                     <div class="tab-pane fade show active" id="manual" role="tabpanel" aria-labelledby="manual-tab">
-                        <form id="manualForm">
+                        <form id="manualForm" class="mt-4">
                             <div class="mb-3">
-                                <textarea class="form-control" id="domainList" rows="5" placeholder="Enter domains (one per line)"></textarea>
+                                <label for="inputType" class="form-label">Input Type</label>
+                                <select class="form-select" id="inputType">
+                                    <option value="ip">IP Addresses</option>
+                                    <option value="domain">Domain Names</option>
+                                </select>
                             </div>
-                            <button type="submit" class="btn btn-primary">Check Domains</button>
+                            
+                            <div class="mb-3">
+                                <label for="inputData" class="form-label">Enter IPs/Domains (one per line)</label>
+                                <textarea class="form-control" id="inputData" rows="5" placeholder="Enter one IP or domain per line"></textarea>
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary">Scan Certificates</button>
                         </form>
+
+                        <div id="progressSection" style="display: none;" class="mt-4">
+                            <h4 id="statusText">Starting scan...</h4>
+                            <div class="progress" style="height: 25px;">
+                                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" 
+                                     aria-valuemax="100">0%</div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4">
+                            <div class="row mt-4">
+                                <!-- Successful Certificates -->
+                                <div class="col-md-6">
+                                    <h4>Found Certificates</h4>
+                                    <table id="certsTable" class="table table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>Target</th>
+                                                <th>Status</th>
+                                                <th>Valid</th>
+                                                <th>Issuer</th>
+                                                <th>Expiry</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                                
+                                <!-- Failed/No Certificates -->
+                                <div class="col-md-6">
+                                    <h4>Failed/No Certificates</h4>
+                                    <table id="failuresTable" class="table table-striped">
+                                        <thead>
+                                            <tr>
+                                                <th>Target</th>
+                                                <th>Status</th>
+                                                <th>Error</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- File Upload Tab -->
@@ -160,43 +215,11 @@
             </div>
         </div>
 
-        <!-- Results Table Section -->
-        <div class="row mt-4">
-            <div class="col">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">Domain Results</h5>
-                        <div class="table-responsive">
-                            <table class="table table-striped" id="resultsTable">
-                                <thead>
-                                    <tr>
-                                        <th>Domain</th>
-                                        <th>Status</th>
-                                        <th>Issuer</th>
-                                        <th>Time Until Expiry</th>
-                                        <th>Expiration Date</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
+        <!-- Add Export Buttons -->
+        <div class="row mt-3 mb-4">
+            <div class="col-12">
+                <button id="exportBtn" class="btn btn-success">Export Results to Excel</button>
             </div>
-        </div>
-
-        <!-- Export and Schedule Buttons -->
-        <div class="mt-4 mb-4">
-            <button id="exportButton" class="btn btn-success me-2" style="display: none;">
-                Export Results to Excel
-            </button>
-            <button id="exportHtmlButton" class="btn btn-primary me-2" style="display: none;">
-                Export Dashboard to HTML
-            </button>
-            <button type="button" class="btn btn-info" data-bs-toggle="modal" data-bs-target="#scheduleModal">
-                <i class="fas fa-clock"></i> Schedule Recurring Scan
-            </button>
         </div>
     </div>
 
@@ -350,471 +373,112 @@
         });
 
         function updateResults(results) {
-            console.log('Starting updateResults with:', results);
-            
-            // Calculate statistics
-            const total = results.length;
-            const valid = results.filter(r => r.valid).length;
-            const expiring = results.filter(r => r.expiring).length;
-            const expired = results.filter(r => r.expired).length;
-            
-            console.log('Certificate statistics:', {
-                total,
-                valid,
-                expiring,
-                expired,
-                validPercent: ((valid/total) * 100).toFixed(1) + '%',
-                expiringPercent: ((expiring/total) * 100).toFixed(1) + '%',
-                expiredPercent: ((expired/total) * 100).toFixed(1) + '%'
-            });
-            
-            // Calculate issuer statistics
-            const issuerCounts = results.reduce((acc, cert) => {
-                const issuer = cert.issuer || 'Unknown';
-                acc[issuer] = (acc[issuer] || 0) + 1;
-                return acc;
-            }, {});
-            
-            console.log('Issuer counts:', issuerCounts);
-            
-            // Get or create the main results container
-            let resultsContainer = document.getElementById('resultsContainer');
-            if (!resultsContainer) {
-                console.log('Creating new results container');
-                resultsContainer = document.createElement('div');
-                resultsContainer.id = 'resultsContainer';
-                document.querySelector('.container').appendChild(resultsContainer);
-            }
-            
-            // Create the card structure
-            let cardHTML = `
-                <div class="card mt-4">
-                    <div class="card-header">
-                        <h5 class="mb-0">Domain Results</h5>
-                    </div>
-                    <div class="card-body">
-                        <!-- Charts Section -->
-                        <div class="row mb-4">
-                            <div class="col-md-4">
-                                <h6 class="text-center">Certificate Status Distribution</h6>
-                                <canvas id="statusChart"></canvas>
-                            </div>
-                            <div class="col-md-4">
-                                <h6 class="text-center">Certificate Issuers</h6>
-                                <canvas id="issuersChart"></canvas>
-                            </div>
-                            <div class="col-md-4">
-                                <h6>Summary</h6>
-                                <ul class="list-unstyled">
-                                    <li>Total Certificates Found: ${total}</li>
-                                    <li class="text-success">Valid: ${valid}</li>
-                                    <li class="text-warning">Expiring Soon: ${expiring}</li>
-                                    <li class="text-danger">Expired: ${expired}</li>
-                                </ul>
-                            </div>
-                        </div>
-
-                        <!-- Export Buttons -->
-                        <div class="mb-3">
-                            <button class="btn btn-primary me-2" onclick="exportToExcel()">Export to Excel</button>
-                            <button class="btn btn-primary" onclick="exportToPDF()">Export to PDF</button>
-                        </div>
-
-                        <!-- Results Table -->
-                        <div class="table-responsive">
-                            <table class="table table-striped" id="resultsTable">
-                                <thead>
-                                    <tr>
-                                        <th>Domain</th>
-                                        <th>Issuer</th>
-                                        <th>Valid From</th>
-                                        <th>Valid Until</th>
-                                        <th>Days Remaining</th>
-                                        <th>Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-            `;
-            
-            results.forEach(cert => {
-                const statusClass = cert.expired ? 'table-danger' : 
-                                  cert.expiring ? 'table-warning' : 
-                                  'table-success';
-                const statusBadge = cert.expired ? '<span class="badge bg-danger">Expired</span>' :
-                           cert.expiring ? '<span class="badge bg-warning">Expiring Soon</span>' :
-                           '<span class="badge bg-success">Valid</span>';
-                
-                cardHTML += `
-                    <tr class="${statusClass}">
-                        <td>${cert.domain || 'N/A'}</td>
-                        <td>${cert.issuer || 'N/A'}</td>
-                        <td>${cert.valid_from || 'N/A'}</td>
-                        <td>${cert.valid_until || 'N/A'}</td>
-                        <td>${cert.days_remaining !== undefined ? cert.days_remaining + ' days' : 'N/A'}</td>
-                        <td>${statusBadge}</td>
-                    </tr>
-                `;
-            });
-            
-            cardHTML += `
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    // Update the container
-    resultsContainer.innerHTML = cardHTML;
-    
-    // Create the status pie chart
-    console.log('Creating status chart...');
-    const statusCtx = document.getElementById('statusChart');
-    if (statusCtx) {
-        // Destroy existing chart if it exists
-        const existingChart = Chart.getChart(statusCtx);
-        if (existingChart) {
-            console.log('Destroying existing status chart');
-            existingChart.destroy();
-        }
-        
-        console.log('Creating new status chart with data:', [valid, expiring, expired]);
-        new Chart(statusCtx, {
-            type: 'pie',
-            data: {
-                labels: ['Valid', 'Expiring Soon', 'Expired'],
-                datasets: [{
-                    data: [valid, expiring, expired],
-                    backgroundColor: ['#28a745', '#ffc107', '#dc3545']
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        position: 'bottom'
-                    }
+            results.forEach(result => {
+                if (result.has_cert) {
+                    // Add to certificates table
+                    const certsBody = document.querySelector('#certsTable tbody');
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${result.ip}</td>
+                        <td>${result.status || 'Unknown'}</td>
+                        <td>${result.valid ? 'Valid' : 'Invalid'}</td>
+                        <td>${result.issuer || 'N/A'}</td>
+                        <td>${result.not_after ? new Date(result.not_after).toLocaleDateString() : 'N/A'}</td>
+                    `;
+                    certsBody.appendChild(row);
+                } else {
+                    // Add to failures table
+                    const failuresBody = document.querySelector('#failuresTable tbody');
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${result.ip}</td>
+                        <td>${result.status || 'Unknown'}</td>
+                        <td>${result.error || 'No Certificate'}</td>
+                    `;
+                    failuresBody.appendChild(row);
                 }
-            }
-        });
-    } else {
-        console.error('Status chart canvas not found');
-    }
-    
-    // Create the issuers bar chart
-    console.log('Creating issuers chart...');
-    const issuersCtx = document.getElementById('issuersChart');
-    if (issuersCtx) {
-        // Destroy existing chart if it exists
-        const existingChart = Chart.getChart(issuersCtx);
-        if (existingChart) {
-            console.log('Destroying existing issuers chart');
-            existingChart.destroy();
-        }
-        
-        const issuerData = Object.entries(issuerCounts).sort((a, b) => b[1] - a[1]);
-        console.log('Creating new issuers chart with data:', issuerData);
-        
-        new Chart(issuersCtx, {
-            type: 'bar',
-            data: {
-                labels: issuerData.map(([issuer]) => issuer),
-                datasets: [{
-                    label: 'Certificates per Issuer',
-                    data: issuerData.map(([, count]) => count),
-                    backgroundColor: '#4e73df'
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            stepSize: 1
-                        }
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: false
-                    }
-                }
-            }
-        });
-    } else {
-        console.error('Issuers chart canvas not found');
-    }
-    
-    console.log('Results display update complete');
-}
-
-        // Add export functions
-        function exportToCSV() {
-            const results = Array.from(document.querySelectorAll('#resultsTable tbody tr')).map(row => {
-                const cells = Array.from(row.cells);
-                return {
-                    domain: cells[0].textContent,
-                    issuer: cells[1].textContent,
-                    validFrom: cells[2].textContent,
-                    validUntil: cells[3].textContent,
-                    daysRemaining: cells[4].textContent,
-                    status: cells[5].textContent.trim()
-                };
             });
-
-            const csvContent = [
-                ['Domain', 'Issuer', 'Valid From', 'Valid Until', 'Days Remaining', 'Status'].join(','),
-                ...results.map(r => [
-                    r.domain,
-                    r.issuer,
-                    r.validFrom,
-                    r.validUntil,
-                    r.daysRemaining,
-                    r.status
-                ].join(','))
-            ].join('\n');
-
-            const blob = new Blob([csvContent], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'certificate_scan_results.csv';
-            a.click();
-            window.URL.revokeObjectURL(url);
         }
 
-        function exportToPDF() {
-            const element = document.getElementById('resultsTable');
-            html2pdf()
-                .set({
-                    margin: 1,
-                    filename: 'certificate_scan_results.pdf',
-                    image: { type: 'jpeg', quality: 0.98 },
-                    html2canvas: { scale: 2 },
-                    jsPDF: { unit: 'in', format: 'letter', orientation: 'landscape' }
-                })
-                .from(element)
-                .save();
-        }
-
-        // Helper functions for status display
-        function getStatusClass(result) {
-            if (result.expired) return 'table-danger';
-            if (result.expiring) return 'table-warning';
-            return 'table-success';
-        }
-
-        function getStatusBadge(result) {
-            if (result.expired) return '<span class="badge bg-danger">Expired</span>';
-            if (result.expiring) return '<span class="badge bg-warning">Expiring Soon</span>';
-            return '<span class="badge bg-success">Valid</span>';
-        }
-
-        function processDomainsWithProgress(formData) {
-            $('#statusBar').show();
-            $('#progressBar')
-                .css('width', '0%')
-                .text('0%')
-                .removeClass('bg-danger')
-                .addClass('progress-bar-striped progress-bar-animated');
-            $('#statusText').text('Processing domains...');
-            $('#exportButton').hide();
-            $('#exportHtmlButton').hide();
-            
-            // Clear previous results
-            $('#summary-section').hide();
-            $('#resultsTable tbody').empty();
-
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/check_certificates', true);
-            
-            xhr.onprogress = function(e) {
-                const lines = xhr.responseText.split('\n');
-                lines.forEach(line => {
-                    if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.substring(6));
-                            console.log("Progress update:", data);
-
-                            if (data.error) {
-                                console.error("Error from server:", data.error);
-                                $('#statusText').text('Error: ' + data.error);
-                                $('#progressBar').addClass('bg-danger');
-                                return;
-                            }
-
-                            if (data.progress) {
-                                const progress = Math.round(data.progress);
-                                $('#progressBar')
-                                    .css('width', progress + '%')
-                                    .text(progress + '%');
-                                $('#statusText').text(
-                                    `Processing ${data.current_domain} (${data.processed}/${data.total})`
-                                );
-                            }
-
-                            if (data.complete) {
-                                console.log("Processing complete, updating results");
-                                updateResults(data.results);
-                                $('#statusText').text('Processing complete!');
-                                $('#progressBar')
-                                    .css('width', '100%')
-                                    .text('100%')
-                                    .removeClass('progress-bar-striped progress-bar-animated');
-                            }
-                        } catch (e) {
-                            console.error("Error parsing progress data:", e);
-                        }
-                    }
-                });
-            };
-
-            xhr.send(formData);
-        }
-
-        // Form handlers
-        $('#uploadForm').on('submit', function(e) {
+        // Clear both tables when starting new scan
+        document.getElementById('manualForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const fileInput = $('#domainFile')[0];
-            if (fileInput.files.length === 0) {
-                alert('Please select a file first');
+            
+            // Clear both tables
+            document.querySelector('#certsTable tbody').innerHTML = '';
+            document.querySelector('#failuresTable tbody').innerHTML = '';
+            
+            // Show progress section
+            const progressSection = document.getElementById('progressSection');
+            const statusText = document.getElementById('statusText');
+            const progressBar = document.getElementById('progressBar');
+            
+            progressSection.style.display = 'block';
+            statusText.textContent = 'Starting scan...';
+            progressBar.style.width = '0%';
+            progressBar.textContent = '0%';
+            
+            const formData = new FormData();
+            const inputType = document.getElementById('inputType').value;
+            const inputData = document.getElementById('inputData').value;
+            
+            if (!inputData.trim()) {
+                alert('Please enter at least one IP or domain');
                 return;
             }
-
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
             
-            // Show progress bar
-            $('#statusBar').show();
-            $('#progressBar')
-                .css('width', '0%')
-                .text('0%')
-                .removeClass('bg-danger')
-                .addClass('progress-bar-striped progress-bar-animated');
-            $('#statusText').text('Processing domains...');
+            formData.append('type', inputType);
+            formData.append('targets', inputData);
             
-            // Clear previous results
-            $('#summary-section').hide();
-            $('#resultsTable tbody').empty();
-
-            processDomainsWithProgress(formData);
-        });
-
-        document.addEventListener('DOMContentLoaded', function() {
-            const form = document.getElementById('manualForm');
-            if (form) {
-                console.log('Found manual form');
-                form.addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    console.log('Form submitted');
+            try {
+                const response = await fetch('/scan_certificates', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const {value, done} = await reader.read();
+                    if (done) break;
                     
-                    const domains = document.getElementById('domainList').value;
-                    console.log('Domains to check:', domains);
+                    const text = decoder.decode(value);
+                    const lines = text.split('\n');
                     
-                    // Show progress bar and update status
-                    const statusBar = document.getElementById('statusBar');
-                    const statusText = document.getElementById('statusText');
-                    const progressBar = document.getElementById('progressBar');
-                    
-                    statusBar.style.display = 'block';
-                    statusText.textContent = 'Starting certificate check...';
-                    progressBar.style.width = '0%';
-                    progressBar.textContent = '0%';
-                    progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
-                    
-                    // Create FormData object
-                    const formData = new FormData();
-                    formData.append('domains', domains);
-                    
-                    // Log the FormData contents
-                    for (let pair of formData.entries()) {
-                        console.log('FormData entry:', pair[0], pair[1]);
-                    }
-                    
-                    fetch('/check_certificates', {
-                        method: 'POST',
-                        body: formData
-                    })
-                    .then(response => {
-                        console.log('Response received:', response);
-                        if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
-                        }
-                        if (!response.body) {
-                            throw new Error('ReadableStream not yet supported in this browser');
-                        }
-                        
-                        const reader = response.body.getReader();
-                        const decoder = new TextDecoder();
-                        
-                        function processStream() {
-                            return reader.read().then(({done, value}) => {
-                                if (done) {
-                                    console.log('Stream complete');
-                                    statusText.textContent = 'Certificate check complete!';
-                                    progressBar.className = 'progress-bar';
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                
+                                if (data.error) {
+                                    statusText.textContent = `Error: ${data.error}`;
                                     return;
                                 }
                                 
-                                const chunk = decoder.decode(value);
-                                console.log('Received chunk:', chunk);
+                                if (data.progress !== undefined) {
+                                    const progress = Math.round(data.progress);
+                                    progressBar.style.width = `${progress}%`;
+                                    progressBar.textContent = `${progress}%`;
+                                    statusText.textContent = `Scanning... ${data.processed} of ${data.total} targets`;
+                                }
                                 
-                                const lines = chunk.split('\n');
-                                lines.forEach(line => {
-                                    if (line.startsWith('data: ')) {
-                                        try {
-                                            const data = JSON.parse(line.slice(6));
-                                            console.log('Processed data:', data);
-                                            
-                                            // Update progress
-                                            const progress = Math.round(data.progress);
-                                            progressBar.style.width = `${progress}%`;
-                                            progressBar.textContent = `${progress}%`;
-                                            statusText.textContent = 
-                                                `Processing ${data.current_domain} (${data.processed}/${data.total})`;
-                                            
-                                            // Update results if available
-                                            if (data.results && data.results.length > 0) {
-                                                console.log(`Updating with ${data.results.length} results`);
-                                                updateResults(data.results);
-                                            }
-                                            
-                                            // Handle completion
-                                            if (data.complete) {
-                                                console.log('Processing complete');
-                                                statusText.textContent = 'Certificate check complete!';
-                                                progressBar.className = 'progress-bar';
-                                                if (!data.results || data.results.length === 0) {
-                                                    updateResults([]);
-                                                }
-                                            }
-                                        } catch (e) {
-                                            console.error('Error processing data:', e, line);
-                                        }
-                                    }
-                                });
+                                if (data.results) {
+                                    updateResults(data.results);
+                                }
                                 
-                                return processStream();
-                            }).catch(error => {
-                                console.error('Error reading stream:', error);
-                                statusText.textContent = 'Error: ' + error.message;
-                                progressBar.className = 'progress-bar bg-danger';
-                            });
+                                if (data.complete) {
+                                    statusText.textContent = 'Scan complete!';
+                                }
+                            } catch (e) {
+                                console.error('Error parsing update:', e);
+                            }
                         }
-                        
-                        return processStream();
-                    })
-                    .catch(error => {
-                        console.error('Fetch error:', error);
-                        statusText.textContent = 'Error: ' + error.message;
-                        progressBar.className = 'progress-bar bg-danger';
-                    });
-                });
-            } else {
-                console.error('Manual form not found!');
+                    }
+                }
+            } catch (error) {
+                statusText.textContent = `Error: ${error.message}`;
+                console.error('Scan error:', error);
             }
         });
 
@@ -899,4 +563,33 @@
                     .slice(0, 5) // Show first 5 domains
                     .map(domain => `<div>${domain}</div>`)
                     .join('') + 
-                    (uploadedDomains.length > 5 ? `<div class="text-muted">...and ${uploadedDomains.length - 5} more</div>`
+                    (uploadedDomains.length > 5 ? `<div class="text-muted">...and ${uploadedDomains.length - 5} more</div>` : '');
+            } catch (e) {
+                console.error('Error loading uploaded domains:', e);
+            }
+        });
+
+        // Add export functionality
+        document.getElementById('exportBtn').addEventListener('click', function() {
+            // Create workbook with two sheets
+            const wb = XLSX.utils.book_new();
+            
+            // Export certificates table
+            const certsTable = document.getElementById('certsTable');
+            const wsFound = XLSX.utils.table_to_sheet(certsTable);
+            XLSX.utils.book_append_sheet(wb, wsFound, "Found Certificates");
+            
+            // Export failures table
+            const failuresTable = document.getElementById('failuresTable');
+            const wsFailed = XLSX.utils.table_to_sheet(failuresTable);
+            XLSX.utils.book_append_sheet(wb, wsFailed, "Failed/No Certificates");
+            
+            // Save the file
+            XLSX.writeFile(wb, "certificate_scan_results.xlsx");
+        });
+    </script>
+
+    <!-- Add SheetJS for Excel export -->
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+</body>
+</html>

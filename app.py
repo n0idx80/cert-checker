@@ -18,8 +18,13 @@ from io import BytesIO
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import os
+import subprocess
+import tempfile
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # Store results globally (you might want to use a proper database in production)
 current_results = []
@@ -452,6 +457,77 @@ def test_domain(domain):
             'error': str(e),
             'domain': domain
         })
+
+@app.route('/scan_certificates', methods=['POST'])
+def scan_certificates():
+    try:
+        print("\n=== Starting Certificate Scan ===", flush=True)
+        print("Request method:", request.method, flush=True)
+        print("Request form:", request.form, flush=True)
+        
+        # Create temporary file for targets
+        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'targets.txt')
+        
+        # Get targets from request
+        targets = request.form.get('targets', '')
+        if not targets:
+            return jsonify({'error': 'No targets provided'}), 400
+            
+        with open(temp_path, 'w') as f:
+            f.write(targets)
+        
+        def generate():
+            try:
+                # Count total targets
+                with open(temp_path, 'r') as f:
+                    total_targets = sum(1 for line in f if line.strip())
+                
+                scanner_path = './cert_scanner'
+                if not os.path.exists(scanner_path):
+                    error_msg = f"Scanner not found at {scanner_path}"
+                    yield f'data: {{"error": "{error_msg}"}}\n\n'
+                    return
+                
+                process = subprocess.Popen(
+                    [scanner_path, temp_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                processed = 0
+                for line in process.stdout:
+                    try:
+                        result = json.loads(line)
+                        processed += 1
+                        
+                        update = {
+                            'progress': (processed / total_targets) * 100,
+                            'processed': processed,
+                            'total': total_targets,
+                            'results': [result],
+                            'complete': False
+                        }
+                        yield f'data: {json.dumps(update)}\n\n'
+                        
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing scanner output: {e}", flush=True)
+                        continue
+                
+                yield f'data: {{"progress": 100, "processed": {total_targets}, "total": {total_targets}, "complete": true}}\n\n'
+                
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        return Response(generate(), mimetype='text/event-stream')
+        
+    except Exception as e:
+        print(f"Error in scan_certificates: {str(e)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True) 
