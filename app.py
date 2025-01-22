@@ -174,96 +174,97 @@ def perform_certificate_scan(domains, name=None, job_id=None):
         return None
 
 @app.route('/check_certificates', methods=['POST'])
-def check_certificates(domains=None, name=None):
-    """Route handler for certificate checking"""
-    print("\n=== Starting Certificate Check ===", flush=True)
-    
+def check_certificates():
     if request.method == 'GET':
         return jsonify({'error': 'POST method required'}), 405
     
-    try:
-        # Log request details
-        print("Request form data:", request.form, flush=True)
-        print("Request files:", request.files, flush=True)
-        
-        # If domains weren't passed (regular file upload)
-        if domains is None:
-            if 'file' not in request.files:
-                # Check if we have form data instead
-                data = request.form.get('domains')
-                print("Form data domains:", data, flush=True)
-                if data:
-                    domains = [d.strip() for d in data.split('\n') if d.strip()]
-                else:
-                    print("No domains provided in request", flush=True)
-                    return jsonify({'error': 'No domains provided'}), 400
-            else:
-                file = request.files['file']
-                if file.filename == '':
-                    return jsonify({'error': 'No file selected'}), 400
-                domains = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
 
-        print(f"\nProcessing {len(domains)} domains: {domains}", flush=True)
+    try:
+        # Read domains from uploaded file
+        domains = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
+        print(f"Found {len(domains)} domains to process")
         
         def generate():
-            scan_id = str(uuid.uuid4())
-            print(f"\nStarting scan {scan_id}", flush=True)
-            
             all_results = []
-            total = len(domains)
+            total_domains = len(domains)
+            processed = 0
             
-            for idx, domain in enumerate(domains, 1):
+            for domain in domains:
                 try:
-                    print(f"\nProcessing domain {idx}/{total}: {domain}", flush=True)
-                    results = process_domain(domain)
-                    print(f"Got {len(results)} certificates for {domain}", flush=True)
+                    print(f"Processing domain: {domain}", flush=True)
                     
-                    if results:
-                        all_results.extend(results)
+                    # Get certificates for the domain
+                    certs = get_certificates(domain)
+                    
+                    # Format certificates for this domain
+                    domain_results = []
+                    for cert in certs:
+                        domain_results.append({
+                            'Domain': domain,
+                            'Status': cert['status'],
+                            'Issuer': cert['issuer'],
+                            'Time Until Expiry': f"{cert['days_until_expiry']} days",
+                            'Expiration Date': cert['not_after']
+                        })
+                    
+                    all_results.extend(domain_results)
+                    processed += 1
                     
                     # Send progress update
-                    progress = (idx / total) * 100
-                    data = {
-                        'progress': progress,
+                    update = {
+                        'progress': (processed / total_domains) * 100,
                         'current_domain': domain,
-                        'processed': idx,
-                        'total': total,
-                        'results': all_results,
+                        'processed': processed,
+                        'total': total_domains,
+                        'results': all_results,  # Send all accumulated results
                         'complete': False
                     }
-                    print(f"Sending progress update: {progress}%", flush=True)
-                    yield 'data: ' + json.dumps(data) + '\n\n'
+                    
+                    yield f"data: {json.dumps(update)}\n\n"
                     
                 except Exception as e:
-                    print(f"Error processing {domain}: {str(e)}", flush=True)
+                    print(f"Error processing domain {domain}: {str(e)}", flush=True)
+                    error_update = {
+                        'error': f"Error processing {domain}: {str(e)}",
+                        'progress': (processed / total_domains) * 100,
+                        'current_domain': domain,
+                        'processed': processed,
+                        'total': total_domains,
+                        'complete': False
+                    }
+                    yield f"data: {json.dumps(error_update)}\n\n"
                     continue
             
             # Send final update
-            print(f"\n=== Scan Complete ===", flush=True)
-            print(f"Total certificates found: {len(all_results)}", flush=True)
-            print("Certificate breakdown:", flush=True)
-            valid_certs = sum(1 for cert in all_results if not cert.get('expired') and not cert.get('expiring'))
-            expiring_certs = sum(1 for cert in all_results if cert.get('expiring'))
-            expired_certs = sum(1 for cert in all_results if cert.get('expired'))
-            print(f"- Valid: {valid_certs}", flush=True)
-            print(f"- Expiring Soon: {expiring_certs}", flush=True)
-            print(f"- Expired: {expired_certs}", flush=True)
-            
-            final_data = {
-                'progress': 100,
-                'current_domain': 'Complete',
-                'processed': total,
-                'total': total,
+            final_update = {
+                'progress': 100.0,
+                'current_domain': domains[-1] if domains else None,
+                'processed': total_domains,
+                'total': total_domains,
                 'results': all_results,
                 'complete': True
             }
-            yield 'data: ' + json.dumps(final_data) + '\n\n'
+            
+            yield f"data: {json.dumps(final_update)}\n\n"
     
         return Response(generate(), mimetype='text/event-stream')
         
     except Exception as e:
-        print(f"Error in route handler: {str(e)}", flush=True)
-        return jsonify({'error': str(e)}), 500
+        print(f"Error in main handler: {str(e)}", flush=True)
+        return jsonify({
+            'error': str(e),
+            'progress': 0,
+            'current_domain': None,
+            'processed': 0,
+            'total': 0,
+            'complete': True
+        }), 500
 
 @app.route('/export_results')
 def export_results():
@@ -585,6 +586,224 @@ def scan_certificates():
                     print(f"Error removing temp file: {str(e)}", flush=True)
     
     return Response(generate(), mimetype='text/event-stream')
+
+def get_certificates(domain):
+    """
+    Query certificates for a domain using crt.sh
+    """
+    print(f"\n=== Checking certificates for {domain} ===", flush=True)
+    
+    try:
+        processed_certs = []
+        
+        # Query crt.sh
+        try:
+            print(f"Querying crt.sh for {domain}", flush=True)
+            session = create_session()
+            url = f"https://crt.sh/?q={domain}&output=json"
+            response = session.get(url, timeout=30)
+            response.raise_for_status()
+            
+            crt_sh_certs = response.json()
+            print(f"Found {len(crt_sh_certs)} certificates in crt.sh for {domain}", flush=True)
+            
+            # Process crt.sh certificates
+            for cert in crt_sh_certs:
+                try:
+                    # Use the correct field names from the crt.sh response
+                    not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
+                    not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
+                    now = datetime.now()
+                    
+                    # Calculate status and days until expiry
+                    days_until_expiry = (not_after - now).days
+                    
+                    if now > not_after:
+                        status = 'Expired'
+                        color = 'danger'
+                    elif now < not_before:
+                        status = 'Not Yet Valid'
+                        color = 'warning'
+                    else:
+                        if days_until_expiry <= 30:
+                            status = f'Expiring Soon ({days_until_expiry} days)'
+                            color = 'warning'
+                        else:
+                            status = 'Valid'
+                            color = 'success'
+                    
+                    # Create the certificate record with all required fields
+                    processed_cert = {
+                        'Domain': domain,
+                        'Status': status,
+                        'Issuer': cert['issuer_name'],
+                        'Time Until Expiry': f"{days_until_expiry} days",
+                        'Expiration Date': not_after.strftime('%Y-%m-%d'),
+                        'common_name': cert['common_name'],
+                        'serial_number': cert['serial_number']
+                    }
+                    processed_certs.append(processed_cert)
+                    
+                except Exception as e:
+                    print(f"Error processing individual certificate: {str(e)}", flush=True)
+                    continue
+                    
+        except Exception as e:
+            print(f"Error querying crt.sh: {str(e)}", flush=True)
+            raise
+            
+        return processed_certs
+            
+    except Exception as e:
+        print(f"Fatal error in get_certificates: {str(e)}", flush=True)
+        return []
+
+@app.route('/query_ctl', methods=['POST'])
+def query_ctl():
+    print("\n=== Starting CT Log Query ===", flush=True)
+    
+    # Get domains from request
+    domains = []
+    if 'file' in request.files:
+        file = request.files['file']
+        file_data = file.read().decode('utf-8').splitlines()
+        domains = [d.strip() for d in file_data if d.strip()]
+    else:
+        text_data = request.form.get('targets', '')
+        domains = [d.strip() for d in text_data.splitlines() if d.strip()]
+    
+    def generate():
+        try:
+            total = len(domains)
+            processed = 0
+            all_results = []
+            
+            for domain in domains:
+                try:
+                    print(f"Querying crt.sh for {domain}", flush=True)
+                    session = create_session()
+                    url = f"https://crt.sh/?q={domain}&output=json"
+                    response = session.get(url, timeout=30)
+                    response.raise_for_status()
+                    
+                    certs = response.json()
+                    print(f"Found {len(certs)} certificates in crt.sh for {domain}", flush=True)
+                    
+                    # Process each certificate
+                    for cert in certs:
+                        try:
+                            not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
+                            not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
+                            now = datetime.now()
+                            
+                            days_until_expiry = (not_after - now).days
+                            
+                            if now > not_after:
+                                status = 'Expired'
+                            elif now < not_before:
+                                status = 'Not Yet Valid'
+                            else:
+                                if days_until_expiry <= 30:
+                                    status = 'Expiring Soon'
+                                else:
+                                    status = 'Valid'
+                            
+                            result = {
+                                'Domain': domain,
+                                'Status': status,
+                                'Issuer': cert['issuer_name'],
+                                'Time Until Expiry': f"{days_until_expiry} days",
+                                'Expiration Date': not_after.strftime('%Y-%m-%d')
+                            }
+                            all_results.append(result)
+                            
+                        except Exception as e:
+                            print(f"Error processing certificate: {str(e)}", flush=True)
+                            continue
+                    
+                    processed += 1
+                    progress = (processed / total) * 100
+                    
+                    update = {
+                        'progress': progress,
+                        'current_domain': domain,
+                        'processed': processed,
+                        'total': total,
+                        'results': all_results,
+                        'complete': False
+                    }
+                    
+                    yield f"data: {json.dumps(update)}\n\n"
+                    
+                except Exception as e:
+                    print(f"Error processing domain {domain}: {str(e)}", flush=True)
+                    continue
+            
+            # Send final update
+            final_update = {
+                'progress': 100.0,
+                'current_domain': domains[-1] if domains else None,
+                'processed': total,
+                'total': total,
+                'results': all_results,
+                'complete': True
+            }
+            
+            yield f"data: {json.dumps(final_update)}\n\n"
+            
+        except Exception as e:
+            print(f"Fatal error in CT log query: {str(e)}", flush=True)
+            error_update = {
+                'error': str(e),
+                'progress': 0,
+                'current_domain': None,
+                'processed': 0,
+                'total': 0,
+                'complete': True
+            }
+            yield f"data: {json.dumps(error_update)}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/check', methods=['POST'])
+def check_domain():
+    domain = request.form.get('domain')
+    if not domain:
+        return jsonify({'error': 'No domain provided'}), 400
+
+    try:
+        # Get certificates for domain
+        certs = get_certificates(domain)
+        
+        # Process results
+        cert_count = len(certs)
+        latest_expiry = None
+        issuers = set()
+        
+        for cert in certs:
+            expiry = cert.get('not_after')
+            if latest_expiry is None or expiry > latest_expiry:
+                latest_expiry = expiry
+            issuers.add(cert.get('issuer'))
+
+        result = {
+            'progress': 100.0,
+            'current_domain': domain,
+            'processed': 1,
+            'total': 1,
+            'results': [{
+                'domain': domain,
+                'cert_count': cert_count,
+                'latest_expiry': latest_expiry,
+                'issuers': sorted(list(issuers))
+            }]
+        }
+        
+        return jsonify(result)
+
+    except Exception as e:
+        app.logger.error(f"Error checking domain {domain}: {str(e)}")
+        return jsonify({'error': f'Error checking domain: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True) 

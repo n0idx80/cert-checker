@@ -176,13 +176,81 @@
                     
                     <!-- File Upload Tab -->
                     <div class="tab-pane fade" id="file" role="tabpanel" aria-labelledby="file-tab">
-                        <form id="uploadForm" enctype="multipart/form-data">
-                            <div class="mb-3">
-                                <input type="file" class="form-control" id="domainFile" accept=".txt">
-                                <small class="text-muted">Upload a .txt file with one domain per line</small>
+                        <div class="container mt-4">
+                            <div class="row">
+                                <!-- Manual Input Column -->
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h5 class="card-title mb-0">Manual Input</h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <form id="ctlManualForm">
+                                                <div class="mb-3">
+                                                    <label for="manualDomains" class="form-label">Enter Domains</label>
+                                                    <textarea class="form-control" id="manualDomains" rows="10" 
+                                                        placeholder="Enter domains (one per line)"></textarea>
+                                                </div>
+                                                <button type="submit" class="btn btn-primary">Query CT Logs</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- File Upload Column -->
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h5 class="card-title mb-0">File Upload</h5>
+                                        </div>
+                                        <div class="card-body">
+                                            <form id="ctlFileForm">
+                                                <div class="mb-3">
+                                                    <label for="domainFile" class="form-label">Upload Domains List</label>
+                                                    <input type="file" class="form-control" id="domainFile" accept=".txt">
+                                                    <small class="text-muted">Upload a .txt file with one domain per line</small>
+                                                </div>
+                                                <button type="submit" class="btn btn-primary">Query CT Logs</button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <button type="submit" class="btn btn-primary">Upload and Check</button>
-                        </form>
+
+                            <!-- Progress and Results Sections -->
+                            <div class="row mt-4">
+                                <div class="col-12">
+                                    <!-- Progress Section -->
+                                    <div id="ctlProgressSection" style="display: none;">
+                                        <h4 id="ctlStatusText">Querying CT logs...</h4>
+                                        <div class="progress" style="height: 25px;">
+                                            <div id="ctlProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                                 role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" 
+                                                 aria-valuemax="100">0%</div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Results Section -->
+                                    <div id="ctlResultsSection" style="display: none;" class="mt-4">
+                                        <h4>Certificate Transparency Log Results</h4>
+                                        <div class="table-responsive">
+                                            <table id="ctlResultsTable" class="table table-striped">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Domain</th>
+                                                        <th>Certificates Found</th>
+                                                        <th>Latest Expiry</th>
+                                                        <th>Issuers</th>
+                                                        <th>Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Scheduled Scans tab content -->
@@ -960,6 +1028,130 @@
         document.getElementById('exportExcelBtn').addEventListener('click', exportHandlers.excel);
         document.getElementById('exportTextBtn').addEventListener('click', exportHandlers.text);
         document.getElementById('exportDashboardBtn').addEventListener('click', exportHandlers.dashboard);
+
+        // Function to handle CT log queries (used by both forms)
+        async function handleCTLQuery(formData) {
+            const progressSection = document.getElementById('ctlProgressSection');
+            const progressBar = document.getElementById('ctlProgressBar');
+            const statusText = document.getElementById('ctlStatusText');
+            progressSection.style.display = 'block';
+
+            try {
+                const response = await fetch('/query_ctl', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const {value, done} = await reader.read();
+                    if (done) break;
+
+                    const text = decoder.decode(value);
+                    const lines = text.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                console.log('Received data:', line);
+                                const jsonStr = line.slice(6);
+                                console.log('Parsing JSON:', jsonStr);
+                                const data = JSON.parse(jsonStr);
+                                
+                                if (data.error) {
+                                    statusText.textContent = `Error: ${data.error}`;
+                                    console.error('Server reported error:', data.error);
+                                    return;
+                                }
+
+                                if (data.progress !== undefined) {
+                                    progressBar.style.width = `${data.progress}%`;
+                                    progressBar.textContent = `${Math.round(data.progress)}%`;
+                                    statusText.textContent = `Processing ${data.current_domain || ''}...`;
+                                }
+
+                                if (data.results && data.results.length > 0) {
+                                    console.log('Updating results with:', data.results);
+                                    updateCTLResults(data.results);
+                                }
+
+                                if (data.complete) {
+                                    statusText.textContent = 'CT Log query complete!';
+                                }
+                            } catch (e) {
+                                console.error('Error parsing CTL update:', e);
+                                console.error('Problematic line:', line);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error querying CT logs:', error);
+                statusText.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        // File upload form handler
+        document.getElementById('ctlFileForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('domainFile');
+            if (!fileInput.files.length) {
+                alert('Please select a file to upload');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            await handleCTLQuery(formData);
+        });
+
+        // Manual input form handler
+        document.getElementById('ctlManualForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const domainsText = document.getElementById('manualDomains').value.trim();
+            if (!domainsText) {
+                alert('Please enter at least one domain');
+                return;
+            }
+
+            const formData = new FormData();
+            const blob = new Blob([domainsText], { type: 'text/plain' });
+            formData.append('file', blob, 'domains.txt');
+            await handleCTLQuery(formData);
+        });
+
+        function updateCTLResults(results) {
+            const resultsSection = document.getElementById('ctlResultsSection');
+            resultsSection.style.display = 'block';
+            
+            const tbody = document.querySelector('#ctlResultsTable tbody');
+            
+            results.forEach(result => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${result.domain}</td>
+                    <td>${result.cert_count}</td>
+                    <td>${result.latest_expiry || 'N/A'}</td>
+                    <td>${result.issuers.join(', ') || 'N/A'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-info" onclick="viewCertDetails('${result.domain}')">
+                            View Details
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function viewCertDetails(domain) {
+            // We'll implement this function later to show certificate details
+            console.log(`Viewing details for ${domain}`);
+        }
     </script>
 </body>
 </html>
