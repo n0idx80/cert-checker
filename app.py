@@ -671,7 +671,7 @@ def query_ctl():
     else:
         text_data = request.form.get('targets', '')
         domains = [d.strip() for d in text_data.splitlines() if d.strip()]
-    
+
     def generate():
         try:
             total = len(domains)
@@ -689,37 +689,32 @@ def query_ctl():
                     certs = response.json()
                     print(f"Found {len(certs)} certificates in crt.sh for {domain}", flush=True)
                     
-                    # Process each certificate
+                    # Group certificates by domain
+                    domain_result = {
+                        'domain': domain,
+                        'cert_count': len(certs),
+                        'latest_expiry': None,
+                        'issuers': set()  # Use set to avoid duplicates
+                    }
+                    
+                    # Process certificates for this domain
+                    latest_date = None
                     for cert in certs:
                         try:
                             not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
-                            not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
-                            now = datetime.now()
+                            if latest_date is None or not_after > latest_date:
+                                latest_date = not_after
+                                domain_result['latest_expiry'] = not_after.strftime('%Y-%m-%d')
                             
-                            days_until_expiry = (not_after - now).days
-                            
-                            if now > not_after:
-                                status = 'Expired'
-                            elif now < not_before:
-                                status = 'Not Yet Valid'
-                            else:
-                                if days_until_expiry <= 30:
-                                    status = 'Expiring Soon'
-                                else:
-                                    status = 'Valid'
-                            
-                            result = {
-                                'Domain': domain,
-                                'Status': status,
-                                'Issuer': cert['issuer_name'],
-                                'Time Until Expiry': f"{days_until_expiry} days",
-                                'Expiration Date': not_after.strftime('%Y-%m-%d')
-                            }
-                            all_results.append(result)
+                            domain_result['issuers'].add(cert['issuer_name'])
                             
                         except Exception as e:
                             print(f"Error processing certificate: {str(e)}", flush=True)
                             continue
+                    
+                    # Convert issuers set to list for JSON serialization
+                    domain_result['issuers'] = list(domain_result['issuers'])
+                    all_results.append(domain_result)
                     
                     processed += 1
                     progress = (processed / total) * 100
@@ -762,7 +757,7 @@ def query_ctl():
                 'complete': True
             }
             yield f"data: {json.dumps(error_update)}\n\n"
-    
+
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/check', methods=['POST'])
