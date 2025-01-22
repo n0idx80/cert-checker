@@ -1127,48 +1127,66 @@
         });
 
         function updateCTLResults(results) {
-            try {
-                const resultsSection = document.getElementById('ctlResultsSection');
-                resultsSection.style.display = 'block';
+            const resultsSection = document.getElementById('ctlResultsSection');
+            resultsSection.style.display = 'block';
+            
+            const tbody = document.querySelector('#ctlResultsTable tbody');
+            tbody.innerHTML = ''; // Clear existing results
+            
+            // Initialize status counts for pie chart
+            const statusCounts = {
+                'Valid': 0,
+                'Expiring Soon': 0,
+                'Expired': 0,
+                'Not Yet Valid': 0
+            };
+            
+            results.forEach(result => {
+                const row = document.createElement('tr');
                 
-                const tbody = document.querySelector('#ctlResultsTable tbody');
+                // Add status-based highlighting
+                row.classList.add(getStatusClass(result.Status));
                 
-                results.forEach(result => {
-                    const row = document.createElement('tr');
-                    try {
-                        row.innerHTML = `
-                            <td>${result.Domain || ''}</td>
-                            <td>${result['Common Name'] || ''}</td>
-                            <td>${result.Status || ''}</td>
-                            <td>${result.Issuer || ''}</td>
-                            <td>${result['Expiration Date'] || ''}</td>
-                            <td>${result['Days Until Expiry'] || ''}</td>
-                        `;
-                        tbody.appendChild(row);
-                    } catch (e) {
-                        console.debug('Skipping malformed result');
-                    }
-                });
-            } catch (e) {
-                console.debug('Error updating results table');
-            }
+                row.innerHTML = `
+                    <td>${result.Domain || ''}</td>
+                    <td>${result['Common Name'] || ''}</td>
+                    <td>${result.Status || ''}</td>
+                    <td>${result.Issuer || ''}</td>
+                    <td>${result['Expiration Date'] || ''}</td>
+                    <td>${result['Days Until Expiry'] || ''}</td>
+                `;
+                tbody.appendChild(row);
+                
+                // Update status counts for pie chart
+                if (result.Status in statusCounts) {
+                    statusCounts[result.Status]++;
+                }
+            });
+            
+            // Create/update pie chart
+            createCTLPieChart(statusCounts);
         }
         
         function getStatusClass(status) {
-            switch(status) {
-                case 'Valid': return 'text-success';
-                case 'Expired': return 'text-danger';
-                case 'Expiring Soon': return 'text-warning';
-                case 'Not Yet Valid': return 'text-info';
-                default: return '';
+            switch (status) {
+                case 'Expired':
+                    return 'table-danger';
+                case 'Expiring Soon':
+                    return 'table-warning';
+                case 'Not Yet Valid':
+                    return 'table-info';
+                case 'Valid':
+                    return 'table-success';
+                default:
+                    return '';
             }
         }
         
         function createCTLPieChart(statusCounts) {
             const ctx = document.getElementById('ctlPieChart').getContext('2d');
             
-            // Check if chart exists and is a Chart instance before destroying
-            if (window.ctlPieChart && typeof window.ctlPieChart.destroy === 'function') {
+            // Destroy existing chart if it exists
+            if (window.ctlPieChart) {
                 window.ctlPieChart.destroy();
             }
             
@@ -1179,10 +1197,10 @@
                     datasets: [{
                         data: Object.values(statusCounts),
                         backgroundColor: [
-                            '#28a745', // Valid - green
-                            '#dc3545', // Expired - red
-                            '#ffc107', // Expiring Soon - yellow
-                            '#17a2b8'  // Not Yet Valid - blue
+                            '#28a745',  // Valid - green
+                            '#ffc107',  // Expiring Soon - yellow
+                            '#dc3545',  // Expired - red
+                            '#17a2b8'   // Not Yet Valid - blue
                         ]
                     }]
                 },
