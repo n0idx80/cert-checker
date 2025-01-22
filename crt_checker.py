@@ -35,14 +35,13 @@ def get_cert_direct(domain, port=443):
         return []
 
 def query_crtsh(domain):
-    print(f"Starting crt.sh query for {domain}...", flush=True)
+    print(f"\n=== Starting crt.sh query for {domain} ===", flush=True)
     url = f"https://crt.sh/?q={domain}&output=json"
     
-    # Create session with retry logic
     session = requests.Session()
     retries = Retry(
-        total=5,  # increased retries
-        backoff_factor=1,  # wait 1, 2, 4, 8, 16 seconds between retries
+        total=5,
+        backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"]
     )
@@ -51,51 +50,89 @@ def query_crtsh(domain):
     try:
         response = session.get(url, timeout=30)
         response.raise_for_status()
-        print(f"Successfully queried crt.sh for {domain}", flush=True)
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error querying crt.sh for {domain}: {str(e)}")
-        print(f"Falling back to direct certificate check for {domain}")
+        certs = response.json()
+        print(f"Raw response from crt.sh:", flush=True)
+        print(json.dumps(certs[0], indent=2), flush=True)  # Print first certificate as example
+        return certs
+    except Exception as e:
+        print(f"Error querying crt.sh: {str(e)}", flush=True)
         return get_cert_direct(domain)
-    finally:
-        session.close()
 
 def process_domain(domain):
     current_date = datetime.utcnow()
-    print(f"Checking {domain}...")
+    print(f"\nChecking {domain}...", flush=True)
     results = []
-    certs = query_crtsh(domain)
     
-    for cert in certs:
-        try:
-            not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
-            not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
-            
-            # Calculate days until expiration (negative if expired)
-            days_until_expiry = (not_after - current_date).days
-            
-            # Determine status
-            expired = days_until_expiry < 0
-            expiring = not expired and days_until_expiry <= 90
-            
-            result = {
-                'domain': domain,
-                'issuer': cert.get('issuer_name', 'Unknown'),
-                'valid_from': not_before.strftime('%Y-%m-%d'),
-                'valid_until': not_after.strftime('%Y-%m-%d'),
-                'days_remaining': days_until_expiry,
-                'expired': expired,
-                'expiring': expiring
-            }
-            
-            print(f"Processed cert for {domain}: {result}")  # Debug log
-            results.append(result)
-            
-        except Exception as e:
-            print(f"Error processing certificate for {domain}: {str(e)}")
-            continue
-    
-    return results
+    try:
+        certs = query_crtsh(domain)
+        print(f"Processing {len(certs)} certificates for {domain}", flush=True)
+        
+        valid_count = 0
+        expiring_count = 0
+        expired_count = 0
+        
+        for cert in certs:
+            try:
+                # Debug: Print raw date strings
+                print("\nRaw certificate dates:", flush=True)
+                print(f"not_before: {cert.get('not_before')}", flush=True)
+                print(f"not_after: {cert.get('not_after')}", flush=True)
+                
+                # Parse dates from certificate
+                not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
+                not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
+                
+                # Calculate days until expiration
+                days_until_expiry = (not_after - current_date).days
+                print(f"Days until expiry: {days_until_expiry}", flush=True)
+                
+                # Determine certificate status
+                expired = days_until_expiry < 0
+                expiring = not expired and days_until_expiry <= 90
+                valid = not expired and not expiring
+                
+                print("Status determination:", flush=True)
+                print(f"- Days remaining: {days_until_expiry}", flush=True)
+                print(f"- Expired: {expired} (days < 0)", flush=True)
+                print(f"- Expiring soon: {expiring} (not expired and days <= 90)", flush=True)
+                print(f"- Valid: {valid} (not expired and not expiring)", flush=True)
+                
+                # Update counters
+                if expired:
+                    expired_count += 1
+                elif expiring:
+                    expiring_count += 1
+                else:
+                    valid_count += 1
+                
+                result = {
+                    'domain': domain,
+                    'issuer': cert.get('issuer_name', 'Unknown'),
+                    'valid_from': not_before.strftime('%Y-%m-%d'),
+                    'valid_until': not_after.strftime('%Y-%m-%d'),
+                    'days_remaining': days_until_expiry,
+                    'expired': expired,
+                    'expiring': expiring,
+                    'valid': valid
+                }
+                
+                results.append(result)
+                
+            except Exception as e:
+                print(f"Error processing certificate: {str(e)}", flush=True)
+                continue
+        
+        print(f"\n=== Final Certificate Counts for {domain} ===", flush=True)
+        print(f"Total certificates: {len(results)}", flush=True)
+        print(f"Valid (>90 days): {valid_count}", flush=True)
+        print(f"Expiring Soon (≤90 days): {expiring_count}", flush=True)
+        print(f"Expired: {expired_count}", flush=True)
+        
+        return results
+        
+    except Exception as e:
+        print(f"Error processing domain: {str(e)}", flush=True)
+        return []
 
 def parse_arguments():
     parser = argparse.ArgumentParser(

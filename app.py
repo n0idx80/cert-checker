@@ -170,26 +170,26 @@ def perform_certificate_scan(domains, name=None, job_id=None):
 @app.route('/check_certificates', methods=['POST'])
 def check_certificates(domains=None, name=None):
     """Route handler for certificate checking"""
-    print("check_certificates route called")  # Debug log
+    print("\n=== Starting Certificate Check ===", flush=True)
     
     if request.method == 'GET':
         return jsonify({'error': 'POST method required'}), 405
     
     try:
         # Log request details
-        print("Request form data:", request.form)
-        print("Request files:", request.files)
+        print("Request form data:", request.form, flush=True)
+        print("Request files:", request.files, flush=True)
         
         # If domains weren't passed (regular file upload)
         if domains is None:
             if 'file' not in request.files:
                 # Check if we have form data instead
                 data = request.form.get('domains')
-                print("Form data domains:", data)  # Debug log
+                print("Form data domains:", data, flush=True)
                 if data:
                     domains = [d.strip() for d in data.split('\n') if d.strip()]
                 else:
-                    print("No domains provided in request")  # Debug log
+                    print("No domains provided in request", flush=True)
                     return jsonify({'error': 'No domains provided'}), 400
             else:
                 file = request.files['file']
@@ -197,20 +197,20 @@ def check_certificates(domains=None, name=None):
                     return jsonify({'error': 'No file selected'}), 400
                 domains = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
 
-        print(f"Processing {len(domains)} domains:", domains)  # Debug log
+        print(f"\nProcessing {len(domains)} domains: {domains}", flush=True)
         
         def generate():
             scan_id = str(uuid.uuid4())
-            print(f"Starting scan {scan_id}")  # Debug log
+            print(f"\nStarting scan {scan_id}", flush=True)
             
             all_results = []
             total = len(domains)
             
             for idx, domain in enumerate(domains, 1):
                 try:
-                    print(f"Processing domain {idx}/{total}: {domain}")  # Debug log
+                    print(f"\nProcessing domain {idx}/{total}: {domain}", flush=True)
                     results = process_domain(domain)
-                    print(f"Got {len(results)} results for {domain}")  # Debug log
+                    print(f"Got {len(results)} certificates for {domain}", flush=True)
                     
                     if results:
                         all_results.extend(results)
@@ -225,15 +225,24 @@ def check_certificates(domains=None, name=None):
                         'results': all_results,
                         'complete': False
                     }
-                    print(f"Sending progress update: {data}")  # Debug log
+                    print(f"Sending progress update: {progress}%", flush=True)
                     yield 'data: ' + json.dumps(data) + '\n\n'
                     
                 except Exception as e:
-                    print(f"Error processing {domain}: {str(e)}")
+                    print(f"Error processing {domain}: {str(e)}", flush=True)
                     continue
             
             # Send final update
-            print(f"Scan complete. Found {len(all_results)} certificates")  # Debug log
+            print(f"\n=== Scan Complete ===", flush=True)
+            print(f"Total certificates found: {len(all_results)}", flush=True)
+            print("Certificate breakdown:", flush=True)
+            valid_certs = sum(1 for cert in all_results if not cert.get('expired') and not cert.get('expiring'))
+            expiring_certs = sum(1 for cert in all_results if cert.get('expiring'))
+            expired_certs = sum(1 for cert in all_results if cert.get('expired'))
+            print(f"- Valid: {valid_certs}", flush=True)
+            print(f"- Expiring Soon: {expiring_certs}", flush=True)
+            print(f"- Expired: {expired_certs}", flush=True)
+            
             final_data = {
                 'progress': 100,
                 'current_domain': 'Complete',

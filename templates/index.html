@@ -350,32 +350,41 @@
         });
 
         function updateResults(results) {
-            console.log('Updating results with:', results);
+            console.log('Starting updateResults with:', results);
+            
+            // Calculate statistics
+            const total = results.length;
+            const valid = results.filter(r => r.valid).length;
+            const expiring = results.filter(r => r.expiring).length;
+            const expired = results.filter(r => r.expired).length;
+            
+            console.log('Certificate statistics:', {
+                total,
+                valid,
+                expiring,
+                expired,
+                validPercent: ((valid/total) * 100).toFixed(1) + '%',
+                expiringPercent: ((expiring/total) * 100).toFixed(1) + '%',
+                expiredPercent: ((expired/total) * 100).toFixed(1) + '%'
+            });
+            
+            // Calculate issuer statistics
+            const issuerCounts = results.reduce((acc, cert) => {
+                const issuer = cert.issuer || 'Unknown';
+                acc[issuer] = (acc[issuer] || 0) + 1;
+                return acc;
+            }, {});
+            
+            console.log('Issuer counts:', issuerCounts);
             
             // Get or create the main results container
             let resultsContainer = document.getElementById('resultsContainer');
             if (!resultsContainer) {
-                console.log('Creating results container');
+                console.log('Creating new results container');
                 resultsContainer = document.createElement('div');
                 resultsContainer.id = 'resultsContainer';
                 document.querySelector('.container').appendChild(resultsContainer);
             }
-            
-            // Clear any existing content
-            resultsContainer.innerHTML = '';
-            
-            if (!results || results.length === 0) {
-                resultsContainer.innerHTML = '<div class="alert alert-info">No certificates found.</div>';
-                return;
-            }
-            
-            // Calculate statistics
-            const total = results.length;
-            const valid = results.filter(r => !r.expired && !r.expiring).length;
-            const expiring = results.filter(r => r.expiring).length;
-            const expired = results.filter(r => r.expired).length;
-            
-            console.log('Certificate statistics:', { total, valid, expiring, expired });
             
             // Create the card structure
             let cardHTML = `
@@ -384,18 +393,23 @@
                         <h5 class="mb-0">Domain Results</h5>
                     </div>
                     <div class="card-body">
-                        <!-- Chart Section -->
+                        <!-- Charts Section -->
                         <div class="row mb-4">
-                            <div class="col-md-6">
-                                <canvas id="certificateChart"></canvas>
+                            <div class="col-md-4">
+                                <h6 class="text-center">Certificate Status Distribution</h6>
+                                <canvas id="statusChart"></canvas>
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-4">
+                                <h6 class="text-center">Certificate Issuers</h6>
+                                <canvas id="issuersChart"></canvas>
+                            </div>
+                            <div class="col-md-4">
                                 <h6>Summary</h6>
                                 <ul class="list-unstyled">
-                                    <li>Total Certificates: ${total}</li>
-                                    <li>Valid: ${valid}</li>
-                                    <li>Expiring Soon: ${expiring}</li>
-                                    <li>Expired: ${expired}</li>
+                                    <li>Total Certificates Found: ${total}</li>
+                                    <li class="text-success">Valid: ${valid}</li>
+                                    <li class="text-warning">Expiring Soon: ${expiring}</li>
+                                    <li class="text-danger">Expired: ${expired}</li>
                                 </ul>
                             </div>
                         </div>
@@ -450,32 +464,91 @@
         </div>
     `;
     
-    // Update the container with the new content
+    // Update the container
     resultsContainer.innerHTML = cardHTML;
     
-    // Create the pie chart
-    const ctx = document.getElementById('certificateChart').getContext('2d');
-    new Chart(ctx, {
-        type: 'pie',
-        data: {
-            labels: ['Valid', 'Expiring Soon', 'Expired'],
-            datasets: [{
-                data: [valid, expiring, expired],
-                backgroundColor: ['#28a745', '#ffc107', '#dc3545']
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                title: {
-                    display: true,
-                    text: 'Certificate Status Distribution'
+    // Create the status pie chart
+    console.log('Creating status chart...');
+    const statusCtx = document.getElementById('statusChart');
+    if (statusCtx) {
+        // Destroy existing chart if it exists
+        const existingChart = Chart.getChart(statusCtx);
+        if (existingChart) {
+            console.log('Destroying existing status chart');
+            existingChart.destroy();
+        }
+        
+        console.log('Creating new status chart with data:', [valid, expiring, expired]);
+        new Chart(statusCtx, {
+            type: 'pie',
+            data: {
+                labels: ['Valid', 'Expiring Soon', 'Expired'],
+                datasets: [{
+                    data: [valid, expiring, expired],
+                    backgroundColor: ['#28a745', '#ffc107', '#dc3545']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
                 }
             }
-        }
-    });
+        });
+    } else {
+        console.error('Status chart canvas not found');
+    }
     
-    console.log('Results display updated');
+    // Create the issuers bar chart
+    console.log('Creating issuers chart...');
+    const issuersCtx = document.getElementById('issuersChart');
+    if (issuersCtx) {
+        // Destroy existing chart if it exists
+        const existingChart = Chart.getChart(issuersCtx);
+        if (existingChart) {
+            console.log('Destroying existing issuers chart');
+            existingChart.destroy();
+        }
+        
+        const issuerData = Object.entries(issuerCounts).sort((a, b) => b[1] - a[1]);
+        console.log('Creating new issuers chart with data:', issuerData);
+        
+        new Chart(issuersCtx, {
+            type: 'bar',
+            data: {
+                labels: issuerData.map(([issuer]) => issuer),
+                datasets: [{
+                    label: 'Certificates per Issuer',
+                    data: issuerData.map(([, count]) => count),
+                    backgroundColor: '#4e73df'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    } else {
+        console.error('Issuers chart canvas not found');
+    }
+    
+    console.log('Results display update complete');
 }
 
         // Add export functions
@@ -641,9 +714,16 @@
                     const domains = document.getElementById('domainList').value;
                     console.log('Domains to check:', domains);
                     
-                    // Show progress bar
+                    // Show progress bar and update status
                     const statusBar = document.getElementById('statusBar');
+                    const statusText = document.getElementById('statusText');
+                    const progressBar = document.getElementById('progressBar');
+                    
                     statusBar.style.display = 'block';
+                    statusText.textContent = 'Starting certificate check...';
+                    progressBar.style.width = '0%';
+                    progressBar.textContent = '0%';
+                    progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated';
                     
                     // Create FormData object
                     const formData = new FormData();
@@ -660,22 +740,28 @@
                     })
                     .then(response => {
                         console.log('Response received:', response);
-                        return response.body.getReader();
-                    })
-                    .then(reader => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        if (!response.body) {
+                            throw new Error('ReadableStream not yet supported in this browser');
+                        }
+                        
+                        const reader = response.body.getReader();
                         const decoder = new TextDecoder();
                         
-                        function readStream() {
+                        function processStream() {
                             return reader.read().then(({done, value}) => {
                                 if (done) {
                                     console.log('Stream complete');
+                                    statusText.textContent = 'Certificate check complete!';
+                                    progressBar.className = 'progress-bar';
                                     return;
                                 }
                                 
                                 const chunk = decoder.decode(value);
                                 console.log('Received chunk:', chunk);
                                 
-                                // Process the chunk
                                 const lines = chunk.split('\n');
                                 lines.forEach(line => {
                                     if (line.startsWith('data: ')) {
@@ -684,29 +770,47 @@
                                             console.log('Processed data:', data);
                                             
                                             // Update progress
-                                            document.getElementById('progressBar').style.width = `${data.progress}%`;
-                                            document.getElementById('progressBar').textContent = `${Math.round(data.progress)}%`;
-                                            document.getElementById('statusText').textContent = 
+                                            const progress = Math.round(data.progress);
+                                            progressBar.style.width = `${progress}%`;
+                                            progressBar.textContent = `${progress}%`;
+                                            statusText.textContent = 
                                                 `Processing ${data.current_domain} (${data.processed}/${data.total})`;
                                             
+                                            // Update results if available
                                             if (data.results && data.results.length > 0) {
+                                                console.log(`Updating with ${data.results.length} results`);
                                                 updateResults(data.results);
                                             }
+                                            
+                                            // Handle completion
+                                            if (data.complete) {
+                                                console.log('Processing complete');
+                                                statusText.textContent = 'Certificate check complete!';
+                                                progressBar.className = 'progress-bar';
+                                                if (!data.results || data.results.length === 0) {
+                                                    updateResults([]);
+                                                }
+                                            }
                                         } catch (e) {
-                                            console.error('Error processing data:', e);
+                                            console.error('Error processing data:', e, line);
                                         }
                                     }
                                 });
                                 
-                                return readStream();
+                                return processStream();
+                            }).catch(error => {
+                                console.error('Error reading stream:', error);
+                                statusText.textContent = 'Error: ' + error.message;
+                                progressBar.className = 'progress-bar bg-danger';
                             });
                         }
                         
-                        return readStream();
+                        return processStream();
                     })
                     .catch(error => {
                         console.error('Fetch error:', error);
-                        document.getElementById('statusText').textContent = 'Error: ' + error.message;
+                        statusText.textContent = 'Error: ' + error.message;
+                        progressBar.className = 'progress-bar bg-danger';
                     });
                 });
             } else {
@@ -795,323 +899,4 @@
                     .slice(0, 5) // Show first 5 domains
                     .map(domain => `<div>${domain}</div>`)
                     .join('') + 
-                    (uploadedDomains.length > 5 ? `<div class="text-muted">...and ${uploadedDomains.length - 5} more</div>` : '');
-                
-                document.getElementById('uploadedDomainsInfo').style.display = 'block';
-            } catch (error) {
-                console.error('Error reading file:', error);
-                alert('Error reading file');
-            }
-        });
-
-        // Handle closing the upload info
-        document.querySelector('#uploadedDomainsInfo .btn-close').addEventListener('click', function() {
-            document.getElementById('uploadedDomainsInfo').style.display = 'none';
-        });
-
-        // Update the save button handler to use uploadedDomains when in file mode
-        document.getElementById('saveSchedule').addEventListener('click', async function() {
-            const name = document.getElementById('scheduleName').value;
-            const frequency = document.getElementById('scheduleFrequency').value;
-            const time = document.getElementById('scheduleTime').value;
-            let domains = [];
-
-            // Add debug logging
-            console.log('Name:', name);
-            console.log('Frequency:', frequency);
-            console.log('Time:', time);
-
-            // Check which tab is active
-            const isFileUpload = document.querySelector('#file-domains.active') !== null;
-            console.log('Is file upload:', isFileUpload);
-            
-            if (isFileUpload) {
-                if (uploadedDomains.length === 0) {
-                    alert('Please upload a file with domains first');
-                    return;
-                }
-                domains = uploadedDomains;
-            } else {
-                const manualDomains = document.getElementById('scheduleDomains').value;
-                if (!manualDomains.trim()) {
-                    alert('Please enter at least one domain');
-                    return;
-                }
-                domains = manualDomains.split('\n').filter(d => d.trim());
-            }
-
-            console.log('Domains:', domains); // Debug log
-
-            // Update validation check
-            if (!name) {
-                alert('Please enter a schedule name');
-                return;
-            }
-            if (domains.length === 0) {
-                alert('Please provide at least one domain');
-                return;
-            }
-            if (!frequency) {
-                alert('Please select a frequency');
-                return;
-            }
-            if (!time) {
-                alert('Please select a time');
-                return;
-            }
-
-            fetch('/schedule_scan', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    name: name,
-                    domains: domains,
-                    frequency: frequency,
-                    time: time
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    console.log('Scan scheduled with job ID:', data.job_id); // Debug log
-                    
-                    // Start monitoring the scan progress with the returned job ID
-                    setupScanProgress(data.job_id, name);
-                    
-                    alert('Scan scheduled successfully!');
-                    loadScheduledTasks();
-                    
-                    // Reset form and close modal
-                    document.getElementById('scheduleForm').reset();
-                    uploadedDomains = [];
-                    document.getElementById('uploadedDomainsInfo').style.display = 'none';
-                    bootstrap.Modal.getInstance(document.getElementById('scheduleModal')).hide();
-                } else {
-                    alert('Failed to schedule scan: ' + data.error);
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Failed to schedule scan');
-            });
-        });
-
-        // Clear uploaded domains when modal is hidden
-        document.getElementById('scheduleModal').addEventListener('hidden.bs.modal', function () {
-            uploadedDomains = [];
-            document.getElementById('uploadedDomainsInfo').style.display = 'none';
-        });
-
-        // Load scheduled tasks when the modal is opened
-        document.getElementById('scheduleModal').addEventListener('show.bs.modal', function () {
-            loadScheduledTasks();
-        });
-
-        // Export functionality
-        function exportToExcel() {
-            const table = document.getElementById('resultsTable');
-            let data = [];
-            
-            // Add summary data
-            data.push(['Certificate Scan Summary']);
-            data.push([`Total Domains Scanned: ${$('#total-domains').text()}`]);
-            data.push([`Domains with Certificates: ${$('#domains-with-certs').text()}`]);
-            data.push([`Total Certificates Found: ${$('#total-certificates').text()}`]);
-            data.push(['']);
-            data.push(['Certificate Status Breakdown:']);
-            data.push([`Valid Certificates: ${$('#valid-certs').text()}`]);
-            data.push([`Expiring Soon: ${$('#expiring-soon').text()}`]);
-            data.push([`Expired: ${$('#expired').text()}`]);
-            data.push([`Not Yet Valid: ${$('#not-yet-valid').text()}`]);
-            data.push(['']);
-            
-            // Get headers
-            const headers = [];
-            table.querySelectorAll('thead th').forEach(th => {
-                headers.push(th.textContent);
-            });
-            data.push(headers);
-            
-            // Get table data
-            table.querySelectorAll('tbody tr').forEach(tr => {
-                const row = [];
-                tr.querySelectorAll('td').forEach(td => {
-                    row.push(td.textContent);
-                });
-                data.push(row);
-            });
-            
-            const timestamp = new Date().toISOString().slice(0,19).replace(/[:]/g, '-');
-            
-            fetch('/export_excel', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    data: data,
-                    filename: `certificate-check-results-${timestamp}.xlsx`
-                })
-            })
-            .then(response => response.blob())
-            .then(blob => {
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `certificate-check-results-${timestamp}.xlsx`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-            })
-            .catch(error => console.error('Error:', error));
-        }
-
-        // Update the click handlers
-        $('#exportButton').on('click', exportToExcel);
-
-        // Call loadScheduledTasks when the page loads and when switching to the scheduled tab
-        document.addEventListener('DOMContentLoaded', loadScheduledTasks);
-        document.querySelector('#scheduled-tab').addEventListener('click', loadScheduledTasks);
-
-        // Add auto-refresh every minute for the scheduled tasks
-        setInterval(() => {
-            if (document.querySelector('#scheduled-tab').classList.contains('active')) {
-                loadScheduledTasks();
-            }
-        }, 60000);
-
-        // Store active scans
-        let activeScans = new Map();
-
-        // Function to update active scans display
-        function updateActiveScanDisplay() {
-            console.log('Updating active scans display. Current scans:', Array.from(activeScans.entries()));
-            const container = document.getElementById('activeScans');
-            if (!container) {
-                console.error('Active scans container not found!');
-                return;
-            }
-
-            if (activeScans.size === 0) {
-                container.innerHTML = '<div class="text-muted">No scans currently running</div>';
-                return;
-            }
-
-            container.innerHTML = '';
-            activeScans.forEach((scan, scanId) => {
-                console.log(`Rendering progress for scan ${scanId}:`, scan);
-                container.innerHTML += `
-                    <div class="scan-progress mb-3" id="scan-${scanId}">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <strong>${scan.name}</strong>
-                            <span class="badge bg-primary">${scan.processed}/${scan.total} domains</span>
-                        </div>
-                        <div class="progress">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                                 role="progressbar" 
-                                 style="width: ${scan.progress}%" 
-                                 aria-valuenow="${scan.progress}" 
-                                 aria-valuemin="0" 
-                                 aria-valuemax="100">
-                                ${Math.round(scan.progress)}%
-                            </div>
-                        </div>
-                        <small class="text-muted">Current domain: ${scan.currentDomain || 'N/A'}</small>
-                    </div>
-                `;
-            });
-        }
-
-        // Set up EventSource for scan progress
-        function setupScanProgress(scanId, scanName) {
-            console.log(`Setting up progress monitoring for scan: ${scanId}`);
-            const eventSource = new EventSource(`/scan_progress/${scanId}`);
-            
-            eventSource.onmessage = function(event) {
-                console.log('Raw event data received:', event.data);
-                const data = JSON.parse(event.data);
-                console.log('Parsed progress data:', data);
-                
-                // Update active scans display
-                if (!data.complete) {
-                    activeScans.set(scanId, {
-                        name: scanName,
-                        progress: data.progress,
-                        processed: data.processed,
-                        total: data.total,
-                        currentDomain: data.current_domain
-                    });
-                    updateActiveScanDisplay();
-                    
-                    // Update results if available
-                    if (data.results && data.results.length > 0) {
-                        console.log(`Updating with ${data.results.length} results`);
-                        updateResults(data.results);
-                    }
-                } else {
-                    // Handle completion
-                    console.log('Scan complete:', scanId);
-                    eventSource.close();
-                    activeScans.delete(scanId);
-                    updateActiveScanDisplay();
-                    
-                    // Final results update
-                    if (data.results && data.results.length > 0) {
-                        console.log(`Final update with ${data.results.length} results`);
-                        updateResults(data.results);
-                    } else {
-                        console.log('No results in final update');
-                        updateResults([]);
-                    }
-                }
-            };
-
-            eventSource.onerror = function(error) {
-                console.error('EventSource error:', error);
-                eventSource.close();
-                activeScans.delete(scanId);
-                updateActiveScanDisplay();
-            };
-        }
-
-        // Add toast for scan completion
-        document.body.insertAdjacentHTML('beforeend', `
-            <div class="toast-container position-fixed bottom-0 end-0 p-3">
-                <div id="scanCompleteToast" class="toast" role="alert">
-                    <div class="toast-header">
-                        <strong class="me-auto">Scan Complete</strong>
-                        <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
-                    </div>
-                    <div class="toast-body">
-                        Scan "<span id="scanCompleteName"></span>" has completed.
-                    </div>
-                </div>
-            </div>
-        `);
-
-        // Update active scans every 30 seconds
-        setInterval(updateActiveScanDisplay, 30000);
-
-        // Make sure the active scans container exists and is visible
-        document.addEventListener('DOMContentLoaded', function() {
-            // Ensure the active scans container exists
-            const scheduledTab = document.getElementById('scheduled');
-            if (!scheduledTab.querySelector('#activeScans')) {
-                scheduledTab.insertAdjacentHTML('beforeend', `
-                    <div class="card mt-3">
-                        <div class="card-header">
-                            <h5 class="mb-0">Active Scans</h5>
-                        </div>
-                        <div class="card-body" id="activeScans">
-                            <div class="no-active-scans text-muted">No scans currently running</div>
-                        </div>
-                    </div>
-                `);
-            }
-        });
-    </script>
-</body>
-
+                    (uploadedDomains.length > 5 ? `<div class="text-muted">...and ${uploadedDomains.length - 5} more</div>`
