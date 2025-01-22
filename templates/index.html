@@ -241,7 +241,6 @@
                                                         <th>Certificates Found</th>
                                                         <th>Latest Expiry</th>
                                                         <th>Issuers</th>
-                                                        <th>Actions</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody></tbody>
@@ -1138,11 +1137,6 @@
                     <td>${result.cert_count}</td>
                     <td>${result.latest_expiry || 'N/A'}</td>
                     <td>${result.issuers.join(', ') || 'N/A'}</td>
-                    <td>
-                        <button class="btn btn-sm btn-info" onclick="viewCertDetails('${result.domain}')">
-                            View Details
-                        </button>
-                    </td>
                 `;
                 tbody.appendChild(row);
             });
