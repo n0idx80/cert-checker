@@ -88,6 +88,33 @@
                             </div>
                         </div>
 
+                        <!-- Add this right after the progress bar section and before the results tables -->
+                        <div class="row mt-4" id="summary-section" style="display: none;">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h4>Certificate Status Distribution</h4>
+                                        <div class="chart-container">
+                                            <canvas id="certStatusChart"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-body">
+                                        <h4>Summary</h4>
+                                        <p><strong>Total Scanned:</strong> <span id="total-count">0</span></p>
+                                        <p><strong>Valid:</strong> <span id="valid-count">0</span></p>
+                                        <p><strong>Expiring Soon (<90 days):</strong> <span id="expiring-soon-count">0</span></p>
+                                        <p><strong>Expired:</strong> <span id="expired-count">0</span></p>
+                                        <p><strong>Invalid:</strong> <span id="invalid-count">0</span></p>
+                                        <p><strong>Failed/No Certificate:</strong> <span id="failed-count">0</span></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="mt-4">
                             <div class="row mt-4">
                                 <!-- Successful Certificates -->
@@ -335,79 +362,154 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Initialize charts
-        const statusChart = new Chart(document.getElementById('statusChart'), {
-            type: 'pie',
-            data: {
-                labels: ['Valid', 'Warning', 'Expired', 'Not Yet Valid'],
-                datasets: [{
-                    data: [0, 0, 0, 0],
-                    backgroundColor: ['#28a745', '#ffc107', '#dc3545', '#17a2b8']
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Certificate Status Distribution'
-                    }
-                }
-            }
-        });
+        // Initialize chart globally
+        let certStatusChart = null;
 
-        const issuerChart = new Chart(document.getElementById('issuerChart'), {
-            type: 'bar',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Certificates per Issuer',
-                    data: [],
-                    backgroundColor: '#007bff'
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Top Certificate Issuers'
+        // Create a global stats object to maintain totals
+        let globalStats = {
+            valid: 0,
+            expiringSoon: 0,
+            expired: 0,
+            invalid: 0,
+            failed: 0
+        };
+
+        // Create the chart as soon as the page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('certStatusChart');
+            if (ctx) {
+                certStatusChart = new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: ['Valid', 'Expiring Soon', 'Expired', 'Invalid'],
+                        datasets: [{
+                            data: [0, 0, 0, 0],
+                            backgroundColor: [
+                                '#28a745', // Valid - Green
+                                '#ffc107', // Expiring Soon - Yellow
+                                '#fd7e14', // Expired - Orange
+                                '#dc3545', // Invalid - Red
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right'
+                            }
+                        }
                     }
-                }
+                });
+                console.log('Chart initialized successfully');
+            } else {
+                console.error('Could not find chart canvas element');
             }
         });
 
         function updateResults(results) {
+            console.log('Raw results received:', JSON.stringify(results, null, 2));
+            
+            const summarySection = document.getElementById('summary-section');
+            summarySection.style.display = 'flex';
+
             results.forEach(result => {
                 if (result.has_cert) {
-                    // Add to certificates table
                     const certsBody = document.querySelector('#certsTable tbody');
                     const row = document.createElement('tr');
+                    
+                    // Calculate days until expiry
+                    const expiryDate = new Date(result.not_after);
+                    const now = new Date();
+                    const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                    
+                    // Determine status and styling
+                    let statusClass, status;
+                    if (daysUntilExpiry <= 0) {
+                        statusClass = 'table-danger';
+                        status = 'Expired';
+                        globalStats.expired++;
+                    } else if (daysUntilExpiry <= 90) {
+                        statusClass = 'table-warning';
+                        status = 'Expiring Soon';
+                        globalStats.expiringSoon++;
+                    } else if (!result.valid) {
+                        statusClass = 'table-danger';
+                        status = 'Invalid';
+                        globalStats.invalid++;
+                    } else {
+                        statusClass = 'table-success';
+                        status = 'Valid';
+                        globalStats.valid++;
+                    }
+                    
+                    row.className = statusClass;
                     row.innerHTML = `
                         <td>${result.ip}</td>
-                        <td>${result.status || 'Unknown'}</td>
-                        <td>${result.valid ? 'Valid' : 'Invalid'}</td>
+                        <td>${status}</td>
                         <td>${result.issuer || 'N/A'}</td>
-                        <td>${result.not_after ? new Date(result.not_after).toLocaleDateString() : 'N/A'}</td>
+                        <td>${expiryDate.toLocaleDateString()}</td>
+                        <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
                     `;
                     certsBody.appendChild(row);
                 } else {
-                    // Add to failures table
+                    globalStats.failed++;
                     const failuresBody = document.querySelector('#failuresTable tbody');
                     const row = document.createElement('tr');
+                    row.className = 'table-secondary';
                     row.innerHTML = `
                         <td>${result.ip}</td>
-                        <td>${result.status || 'Unknown'}</td>
+                        <td>Failed</td>
                         <td>${result.error || 'No Certificate'}</td>
                     `;
                     failuresBody.appendChild(row);
                 }
             });
+
+            // Update summary counts with global stats
+            document.getElementById('total-count').textContent = 
+                globalStats.valid + globalStats.expiringSoon + globalStats.expired + 
+                globalStats.invalid + globalStats.failed;
+            document.getElementById('valid-count').textContent = globalStats.valid;
+            document.getElementById('expiring-soon-count').textContent = globalStats.expiringSoon;
+            document.getElementById('expired-count').textContent = globalStats.expired;
+            document.getElementById('invalid-count').textContent = globalStats.invalid;
+            document.getElementById('failed-count').textContent = globalStats.failed;
+
+            // Update pie chart with global stats (excluding failed)
+            if (certStatusChart && certStatusChart.data && certStatusChart.data.datasets) {
+                certStatusChart.data.datasets[0].data = [
+                    globalStats.valid,
+                    globalStats.expiringSoon,
+                    globalStats.expired,
+                    globalStats.invalid
+                ];
+                certStatusChart.update();
+            }
         }
 
-        // Clear both tables when starting new scan
+        // Reset global stats when starting a new scan
         document.getElementById('manualForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            // Reset global stats
+            globalStats = {
+                valid: 0,
+                expiringSoon: 0,
+                expired: 0,
+                invalid: 0,
+                failed: 0
+            };
+            
+            // Show summary section
+            document.getElementById('summary-section').style.display = 'flex';
+            
+            // Reset the chart (four zeros instead of five)
+            if (certStatusChart && certStatusChart.data && certStatusChart.data.datasets) {
+                certStatusChart.data.datasets[0].data = [0, 0, 0, 0];
+                certStatusChart.update();
+            }
             
             // Clear both tables
             document.querySelector('#certsTable tbody').innerHTML = '';

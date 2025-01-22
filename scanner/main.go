@@ -15,6 +15,7 @@ type CertResult struct {
 	IP        string    `json:"ip"`
 	HasCert   bool      `json:"has_cert"`
 	Valid     bool      `json:"valid"`
+	Expired   bool      `json:"expired"`
 	Issuer    string    `json:"issuer"`
 	NotBefore time.Time `json:"not_before"`
 	NotAfter  time.Time `json:"not_after"`
@@ -70,13 +71,23 @@ func scanIP(target string, results chan<- CertResult, wg *sync.WaitGroup) {
 	}
 	defer conn.Close()
 
-	cert := conn.ConnectionState().PeerCertificates[0]
-	result.HasCert = true
-	result.Valid = time.Now().After(cert.NotBefore) && time.Now().Before(cert.NotAfter)
-	result.Issuer = cert.Issuer.CommonName
-	result.NotBefore = cert.NotBefore
-	result.NotAfter = cert.NotAfter
-	result.Status = "Certificate Found"
+	if cert := conn.ConnectionState().PeerCertificates[0]; cert != nil {
+		now := time.Now()
+		result.HasCert = true
+		result.Expired = now.After(cert.NotAfter)
+		result.Valid = now.After(cert.NotBefore) && now.Before(cert.NotAfter)
+		result.Issuer = cert.Issuer.CommonName
+		result.NotBefore = cert.NotBefore
+		result.NotAfter = cert.NotAfter
+
+		if result.Expired {
+			result.Status = "Certificate Expired"
+		} else if !result.Valid {
+			result.Status = "Certificate Invalid"
+		} else {
+			result.Status = "Certificate Valid"
+		}
+	}
 
 	results <- result
 }
