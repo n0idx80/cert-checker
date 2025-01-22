@@ -461,100 +461,116 @@ def test_domain(domain):
 
 @app.route('/scan_certificates', methods=['POST'])
 def scan_certificates():
-    try:
-        print("\n=== Starting Certificate Scan ===", flush=True)
-        print("Request method:", request.method, flush=True)
-        print("Request form:", request.form, flush=True)
-        print("Request files:", request.files, flush=True)
+    BATCH_SIZE = 1000
+    
+    print("\n=== Starting Certificate Scan ===", flush=True)
+    print(f"Time: {datetime.now()}", flush=True)
+    
+    # Store request data before entering generator
+    file_data = None
+    if 'file' in request.files:
+        file_data = request.files['file'].read()
+        print(f"Received file upload of size: {len(file_data)} bytes", flush=True)
+    text_data = request.form.get('targets', '')
+    
+    def generate():
+        temp_path = None
+        process = None
+        start_time = time.time()
         
-        # Create temporary file for targets
-        temp_path = os.path.join(app.config['UPLOAD_FOLDER'], 'targets.txt')
-        
-        # Get targets from either file upload or text input
-        if 'file' in request.files:
-            print("Processing uploaded file", flush=True)
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({'error': 'No selected file'}), 400
-            if file:
-                filename = secure_filename(file.filename)
-                file.save(temp_path)
-                print(f"File saved to: {temp_path}", flush=True)
-        else:
-            print("Processing form data", flush=True)
-            targets = request.form.get('targets', '')
-            if not targets:
-                return jsonify({'error': 'No targets provided'}), 400
-            print(f"Received targets:\n{targets}", flush=True)
-            with open(temp_path, 'w') as f:
-                f.write(targets)
-            print("Targets written to temp file", flush=True)
-        
-        def generate():
-            try:
-                # Count total targets
-                with open(temp_path, 'r') as f:
-                    total_targets = sum(1 for line in f if line.strip())
-                print(f"Total targets to scan: {total_targets}", flush=True)
-                
-                scanner_path = './cert_scanner'
-                if not os.path.exists(scanner_path):
-                    error_msg = f"Scanner not found at {scanner_path}"
-                    print(f"ERROR: {error_msg}", flush=True)
-                    yield f'data: {{"error": "{error_msg}"}}\n\n'
-                    return
-                
-                print(f"Running scanner with command: {scanner_path} {temp_path}", flush=True)
-                
-                process = subprocess.Popen(
-                    [scanner_path, temp_path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    bufsize=1,
-                    universal_newlines=True
-                )
-                
-                processed = 0
-                for line in process.stdout:
-                    print(f"Scanner output: {line.strip()}", flush=True)
-                    try:
-                        result = json.loads(line)
-                        processed += 1
-                        
+        try:
+            print("Creating temporary file...", flush=True)
+            temp_path = os.path.join(app.config['UPLOAD_FOLDER'], f'targets_{uuid.uuid4()}.txt')
+            
+            # Write the stored data to temp file
+            with open(temp_path, 'wb' if file_data else 'w') as f:
+                if file_data:
+                    f.write(file_data)
+                else:
+                    f.write(text_data)
+            
+            print(f"Temporary file created: {temp_path}", flush=True)
+            
+            # Count total targets
+            with open(temp_path, 'r') as f:
+                total_targets = sum(1 for line in f if line.strip())
+            
+            print(f"Found {total_targets} targets to process", flush=True)
+            print("Starting scanner process...", flush=True)
+            
+            # Start the scanner process
+            process = subprocess.Popen(
+                ['./cert_scanner', temp_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            print("Scanner process started", flush=True)
+            processed = 0
+            current_batch = []
+            last_progress_time = time.time()
+            
+            for line in process.stdout:
+                try:
+                    current_time = time.time()
+                    result = json.loads(line)
+                    current_batch.append(result)
+                    processed += 1
+                    
+                    # Print progress every 5 seconds
+                    if current_time - last_progress_time >= 5:
+                        elapsed = current_time - start_time
+                        rate = processed / elapsed if elapsed > 0 else 0
+                        print(f"Progress: {processed}/{total_targets} ({processed/total_targets*100:.2f}%) - Rate: {rate:.2f} IPs/sec", flush=True)
+                        last_progress_time = current_time
+                    
+                    # Send batch when it reaches size or is last item
+                    if len(current_batch) >= BATCH_SIZE or processed == total_targets:
+                        progress = (processed / total_targets) * 100
                         update = {
-                            'progress': (processed / total_targets) * 100,
+                            'progress': progress,
                             'processed': processed,
                             'total': total_targets,
-                            'results': [result],
-                            'complete': False
+                            'results': current_batch,
+                            'complete': processed == total_targets
                         }
-                        print(f"Sending update: {json.dumps(update)}", flush=True)
                         yield f'data: {json.dumps(update)}\n\n'
+                        current_batch = []
                         
-                    except json.JSONDecodeError as e:
-                        print(f"Error parsing scanner output: {e}", flush=True)
-                        print(f"Problematic line: {line}", flush=True)
-                        continue
+                except json.JSONDecodeError as e:
+                    print(f"Error parsing scanner output: {e}", flush=True)
+                    print(f"Problematic line: {line}", flush=True)
+                    continue
                 
-                # Check for any stderr output
-                stderr_output = process.stderr.read()
-                if stderr_output:
-                    print(f"Scanner stderr output: {stderr_output}", flush=True)
-                
-                yield f'data: {{"progress": 100, "processed": {total_targets}, "total": {total_targets}, "complete": true}}\n\n'
-                
-            finally:
-                if os.path.exists(temp_path):
+            # Check for any stderr output
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                print(f"Scanner stderr output: {stderr_output}", flush=True)
+            
+            total_time = time.time() - start_time
+            print(f"\n=== Scan Complete ===", flush=True)
+            print(f"Total time: {total_time:.2f} seconds", flush=True)
+            print(f"Average rate: {total_targets/total_time:.2f} IPs/sec", flush=True)
+            
+        except Exception as e:
+            print(f"Error in scan_certificates: {str(e)}", flush=True)
+            import traceback
+            traceback.print_exc()
+            yield f'data: {{"error": "{str(e)}"}}\n\n'
+            
+        finally:
+            if process:
+                process.terminate()
+            if temp_path and os.path.exists(temp_path):
+                try:
                     os.remove(temp_path)
                     print("Cleaned up temporary file", flush=True)
-        
-        return Response(generate(), mimetype='text/event-stream')
-        
-    except Exception as e:
-        print(f"Error in scan_certificates: {str(e)}", flush=True)
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+                except Exception as e:
+                    print(f"Error removing temp file: {str(e)}", flush=True)
+    
+    return Response(generate(), mimetype='text/event-stream')
 
 if __name__ == '__main__':
     app.run(debug=True) 

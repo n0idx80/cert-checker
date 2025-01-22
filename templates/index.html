@@ -408,66 +408,90 @@
             }
         });
 
+        // Add batch size constant
+        const BATCH_SIZE = 1000; // Process 1000 results at a time
+
+        // Modify updateResults to handle batches
         function updateResults(results) {
-            console.log('Raw results received:', JSON.stringify(results, null, 2));
+            console.log(`Processing batch of ${results.length} results`);
             
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
 
-            results.forEach(result => {
-                if (result.has_cert) {
-                    const certsBody = document.querySelector('#certsTable tbody');
-                    const row = document.createElement('tr');
-                    
-                    // Calculate days until expiry
-                    const expiryDate = new Date(result.not_after);
-                    const now = new Date();
-                    const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                    
-                    // Determine status and styling
-                    let statusClass, status;
-                    if (daysUntilExpiry <= 0) {
-                        statusClass = 'table-danger';
-                        status = 'Expired';
-                        globalStats.expired++;
-                    } else if (daysUntilExpiry <= 90) {
-                        statusClass = 'table-warning';
-                        status = 'Expiring Soon';
-                        globalStats.expiringSoon++;
-                    } else if (!result.valid) {
-                        statusClass = 'table-danger';
-                        status = 'Invalid';
-                        globalStats.invalid++;
+            // Process results in batches
+            const processResultsBatch = (startIdx) => {
+                const endIdx = Math.min(startIdx + BATCH_SIZE, results.length);
+                const batch = results.slice(startIdx, endIdx);
+                
+                batch.forEach(result => {
+                    if (result.has_cert) {
+                        const certsBody = document.querySelector('#certsTable tbody');
+                        const row = document.createElement('tr');
+                        
+                        // Calculate days until expiry
+                        const expiryDate = new Date(result.not_after);
+                        const now = new Date();
+                        const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                        
+                        // Determine status and styling
+                        let statusClass, status;
+                        if (daysUntilExpiry <= 0) {
+                            statusClass = 'table-danger';
+                            status = 'Expired';
+                            globalStats.expired++;
+                        } else if (daysUntilExpiry <= 90) {
+                            statusClass = 'table-warning';
+                            status = 'Expiring Soon';
+                            globalStats.expiringSoon++;
+                        } else if (!result.valid) {
+                            statusClass = 'table-danger';
+                            status = 'Invalid';
+                            globalStats.invalid++;
+                        } else {
+                            statusClass = 'table-success';
+                            status = 'Valid';
+                            globalStats.valid++;
+                        }
+                        
+                        row.className = statusClass;
+                        row.innerHTML = `
+                            <td>${result.ip}</td>
+                            <td>${status}</td>
+                            <td>${result.issuer || 'N/A'}</td>
+                            <td>${expiryDate.toLocaleDateString()}</td>
+                            <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
+                        `;
+                        certsBody.appendChild(row);
                     } else {
-                        statusClass = 'table-success';
-                        status = 'Valid';
-                        globalStats.valid++;
+                        globalStats.failed++;
+                        const failuresBody = document.querySelector('#failuresTable tbody');
+                        const row = document.createElement('tr');
+                        row.className = 'table-secondary';
+                        row.innerHTML = `
+                            <td>${result.ip}</td>
+                            <td>Failed</td>
+                            <td>${result.error || 'No Certificate'}</td>
+                        `;
+                        failuresBody.appendChild(row);
                     }
-                    
-                    row.className = statusClass;
-                    row.innerHTML = `
-                        <td>${result.ip}</td>
-                        <td>${status}</td>
-                        <td>${result.issuer || 'N/A'}</td>
-                        <td>${expiryDate.toLocaleDateString()}</td>
-                        <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
-                    `;
-                    certsBody.appendChild(row);
-                } else {
-                    globalStats.failed++;
-                    const failuresBody = document.querySelector('#failuresTable tbody');
-                    const row = document.createElement('tr');
-                    row.className = 'table-secondary';
-                    row.innerHTML = `
-                        <td>${result.ip}</td>
-                        <td>Failed</td>
-                        <td>${result.error || 'No Certificate'}</td>
-                    `;
-                    failuresBody.appendChild(row);
-                }
-            });
+                });
 
-            // Update summary counts with global stats
+                // Update UI with current totals
+                updateUIWithStats();
+
+                // Process next batch if there are more results
+                if (endIdx < results.length) {
+                    setTimeout(() => processResultsBatch(endIdx), 0);
+                }
+            };
+
+            // Start processing first batch
+            processResultsBatch(0);
+        }
+
+        // Separate UI updates
+        function updateUIWithStats() {
+            // Update summary counts
             document.getElementById('total-count').textContent = 
                 globalStats.valid + globalStats.expiringSoon + globalStats.expired + 
                 globalStats.invalid + globalStats.failed;
@@ -477,7 +501,7 @@
             document.getElementById('invalid-count').textContent = globalStats.invalid;
             document.getElementById('failed-count').textContent = globalStats.failed;
 
-            // Update pie chart with global stats (excluding failed)
+            // Update pie chart
             if (certStatusChart && certStatusChart.data && certStatusChart.data.datasets) {
                 certStatusChart.data.datasets[0].data = [
                     globalStats.valid,
@@ -489,11 +513,38 @@
             }
         }
 
-        // Reset global stats when starting a new scan
+        // Add table management
+        let certTableBody, failureTableBody;
+        const MAX_VISIBLE_ROWS = 1000; // Limit visible rows
+
+        function initializeTables() {
+            certTableBody = document.querySelector('#certsTable tbody');
+            failureTableBody = document.querySelector('#failuresTable tbody');
+            
+            // Clear existing rows
+            certTableBody.innerHTML = '';
+            failureTableBody.innerHTML = '';
+        }
+
+        function addTableRow(table, rowHTML) {
+            const tbody = table.querySelector('tbody');
+            
+            // Remove oldest row if at limit
+            if (tbody.children.length >= MAX_VISIBLE_ROWS) {
+                tbody.removeChild(tbody.firstChild);
+            }
+            
+            // Add new row
+            const row = document.createElement('tr');
+            row.innerHTML = rowHTML;
+            tbody.appendChild(row);
+        }
+
+        // Update form submission to handle large files
         document.getElementById('manualForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            // Reset global stats
+            // Reset stats and UI
             globalStats = {
                 valid: 0,
                 expiringSoon: 0,
@@ -502,29 +553,20 @@
                 failed: 0
             };
             
-            // Show summary section
+            initializeTables();
             document.getElementById('summary-section').style.display = 'flex';
             
-            // Reset the chart (four zeros instead of five)
             if (certStatusChart && certStatusChart.data && certStatusChart.data.datasets) {
                 certStatusChart.data.datasets[0].data = [0, 0, 0, 0];
                 certStatusChart.update();
             }
-            
-            // Clear both tables
-            document.querySelector('#certsTable tbody').innerHTML = '';
-            document.querySelector('#failuresTable tbody').innerHTML = '';
-            
-            // Show progress section
+
+            // Show processing message
             const progressSection = document.getElementById('progressSection');
-            const statusText = document.getElementById('statusText');
-            const progressBar = document.getElementById('progressBar');
-            
             progressSection.style.display = 'block';
-            statusText.textContent = 'Starting scan...';
-            progressBar.style.width = '0%';
-            progressBar.textContent = '0%';
-            
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = 'Processing large dataset...';
+
             const formData = new FormData();
             const inputType = document.getElementById('inputType').value;
             const fileInput = document.getElementById('fileInput');
@@ -570,6 +612,7 @@
                                 
                                 if (data.progress !== undefined) {
                                     const progress = Math.round(data.progress);
+                                    const progressBar = document.getElementById('progressBar');
                                     progressBar.style.width = `${progress}%`;
                                     progressBar.textContent = `${progress}%`;
                                     statusText.textContent = `Scanning... ${data.processed} of ${data.total} targets`;

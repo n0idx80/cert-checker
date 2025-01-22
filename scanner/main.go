@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -9,7 +10,11 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
+
+var limiter = rate.NewLimiter(rate.Limit(100), 1) // 100 requests per second burst of 1
 
 type CertResult struct {
 	IP        string    `json:"ip"`
@@ -25,6 +30,13 @@ type CertResult struct {
 
 func scanIP(target string, results chan<- CertResult, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	// Wait for rate limiter
+	err := limiter.Wait(context.Background())
+	if err != nil {
+		// Handle rate limit error
+		return
+	}
 
 	result := CertResult{
 		IP:      target,
@@ -50,7 +62,7 @@ func scanIP(target string, results chan<- CertResult, wg *sync.WaitGroup) {
 
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{
-			Timeout: 2 * time.Second,
+			Timeout: 5 * time.Second,
 		},
 		"tcp",
 		fmt.Sprintf("%s:443", host),
