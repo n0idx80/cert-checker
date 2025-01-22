@@ -17,15 +17,17 @@ import (
 var limiter = rate.NewLimiter(rate.Limit(100), 1) // 100 requests per second burst of 1
 
 type CertResult struct {
-	IP        string    `json:"ip"`
-	HasCert   bool      `json:"has_cert"`
-	Valid     bool      `json:"valid"`
-	Expired   bool      `json:"expired"`
-	Issuer    string    `json:"issuer"`
-	NotBefore time.Time `json:"not_before"`
-	NotAfter  time.Time `json:"not_after"`
-	Error     string    `json:"error,omitempty"`
-	Status    string    `json:"status,omitempty"`
+	IP         string    `json:"ip"`
+	HasCert    bool      `json:"has_cert"`
+	Valid      bool      `json:"valid"`
+	Expired    bool      `json:"expired"`
+	Issuer     string    `json:"issuer"`
+	CommonName string    `json:"common_name"` // Subject CN
+	SANs       []string  `json:"sans"`        // Subject Alternative Names
+	NotBefore  time.Time `json:"not_before"`
+	NotAfter   time.Time `json:"not_after"`
+	Error      string    `json:"error,omitempty"`
+	Status     string    `json:"status,omitempty"`
 }
 
 func scanIP(target string, results chan<- CertResult, wg *sync.WaitGroup) {
@@ -89,6 +91,27 @@ func scanIP(target string, results chan<- CertResult, wg *sync.WaitGroup) {
 		result.Expired = now.After(cert.NotAfter)
 		result.Valid = now.After(cert.NotBefore) && now.Before(cert.NotAfter)
 		result.Issuer = cert.Issuer.CommonName
+		result.CommonName = cert.Subject.CommonName
+		result.SANs = cert.DNSNames
+
+		// Debug logging
+		fmt.Fprintf(os.Stderr, "Certificate for %s:\n", target)
+		fmt.Fprintf(os.Stderr, "  Subject CN: %s\n", cert.Subject.CommonName)
+		fmt.Fprintf(os.Stderr, "  SANs: %v\n", cert.DNSNames)
+		fmt.Fprintf(os.Stderr, "  Organization: %v\n", cert.Subject.Organization)
+		fmt.Fprintf(os.Stderr, "  Issuer: %s\n", cert.Issuer.CommonName)
+
+		// Try to get the most meaningful name
+		if result.CommonName == "" {
+			// If no CN, try to get the first SAN
+			if len(cert.DNSNames) > 0 {
+				result.CommonName = cert.DNSNames[0]
+			} else if len(cert.Subject.Organization) > 0 {
+				// If no SAN, try organization name
+				result.CommonName = cert.Subject.Organization[0]
+			}
+		}
+
 		result.NotBefore = cert.NotBefore
 		result.NotAfter = cert.NotAfter
 

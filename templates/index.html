@@ -23,11 +23,25 @@
             display: inline-block;
         }
     </style>
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
 </head>
 
 <body>
     <div class="container mt-4">
-        <h1>Certificate Checker Dashboard</h1>
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Certificate Checker Dashboard</h1>
+            <div class="btn-group">
+                <button id="exportExcelBtn" class="btn btn-success me-2">
+                    <i class="fas fa-file-excel"></i> Export to Excel
+                </button>
+                <button id="exportTextBtn" class="btn btn-primary me-2">
+                    <i class="fas fa-file-alt"></i> Export to Text
+                </button>
+                <button id="exportDashboardBtn" class="btn btn-info">
+                    <i class="fas fa-download"></i> Save Dashboard
+                </button>
+            </div>
+        </div>
         
         <!-- Input Section -->
         <div class="card mb-4">
@@ -123,11 +137,13 @@
                                     <table id="certsTable" class="table table-striped">
                                         <thead>
                                             <tr>
-                                                <th>Target</th>
+                                                <th>IP</th>
                                                 <th>Status</th>
-                                                <th>Valid</th>
+                                                <th>Common Name</th>
+                                                <th>Alternative Names</th>
                                                 <th>Issuer</th>
-                                                <th>Expiry</th>
+                                                <th>Expiry Date</th>
+                                                <th>Days Until Expiry</th>
                                             </tr>
                                         </thead>
                                         <tbody></tbody>
@@ -244,13 +260,6 @@
                     <p><strong>Expired:</strong> <span id="expired">0</span></p>
                     <p><strong>Not Yet Valid:</strong> <span id="not-yet-valid">0</span></p>
                 </div>
-            </div>
-        </div>
-
-        <!-- Add Export Buttons -->
-        <div class="row mt-3 mb-4">
-            <div class="col-12">
-                <button id="exportBtn" class="btn btn-success">Export Results to Excel</button>
             </div>
         </div>
     </div>
@@ -413,80 +422,89 @@
 
         // Modify updateResults to handle batches
         function updateResults(results) {
-            console.log(`Processing batch of ${results.length} results`);
+            console.log('Raw results received:', JSON.stringify(results, null, 2));
             
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
 
-            // Process results in batches
-            const processResultsBatch = (startIdx) => {
-                const endIdx = Math.min(startIdx + BATCH_SIZE, results.length);
-                const batch = results.slice(startIdx, endIdx);
-                
-                batch.forEach(result => {
-                    if (result.has_cert) {
-                        const certsBody = document.querySelector('#certsTable tbody');
-                        const row = document.createElement('tr');
-                        
-                        // Calculate days until expiry
-                        const expiryDate = new Date(result.not_after);
-                        const now = new Date();
-                        const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                        
-                        // Determine status and styling
-                        let statusClass, status;
-                        if (daysUntilExpiry <= 0) {
-                            statusClass = 'table-danger';
-                            status = 'Expired';
-                            globalStats.expired++;
-                        } else if (daysUntilExpiry <= 90) {
-                            statusClass = 'table-warning';
-                            status = 'Expiring Soon';
-                            globalStats.expiringSoon++;
-                        } else if (!result.valid) {
-                            statusClass = 'table-danger';
-                            status = 'Invalid';
-                            globalStats.invalid++;
-                        } else {
-                            statusClass = 'table-success';
-                            status = 'Valid';
-                            globalStats.valid++;
-                        }
-                        
-                        row.className = statusClass;
-                        row.innerHTML = `
-                            <td>${result.ip}</td>
-                            <td>${status}</td>
-                            <td>${result.issuer || 'N/A'}</td>
-                            <td>${expiryDate.toLocaleDateString()}</td>
-                            <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
-                        `;
-                        certsBody.appendChild(row);
+            // Sort the results by priority (expired -> expiring soon -> valid)
+            results.sort((a, b) => {
+                if (!a.has_cert && !b.has_cert) return 0;
+                if (!a.has_cert) return 1;
+                if (!b.has_cert) return -1;
+
+                const aExpiryDate = new Date(a.not_after);
+                const bExpiryDate = new Date(b.not_after);
+                const now = new Date();
+                const aDaysUntilExpiry = Math.ceil((aExpiryDate - now) / (1000 * 60 * 60 * 24));
+                const bDaysUntilExpiry = Math.ceil((bExpiryDate - now) / (1000 * 60 * 60 * 24));
+
+                // Priority order: expired (≤ 0 days) -> expiring soon (≤ 90 days) -> valid
+                if (aDaysUntilExpiry <= 0 && bDaysUntilExpiry > 0) return -1;
+                if (bDaysUntilExpiry <= 0 && aDaysUntilExpiry > 0) return 1;
+                if (aDaysUntilExpiry <= 90 && bDaysUntilExpiry > 90) return -1;
+                if (bDaysUntilExpiry <= 90 && aDaysUntilExpiry > 90) return 1;
+                return aDaysUntilExpiry - bDaysUntilExpiry; // Sort by days until expiry within each category
+            });
+
+            // Process the sorted results
+            results.forEach(result => {
+                if (result.has_cert) {
+                    const certsBody = document.querySelector('#certsTable tbody');
+                    const row = document.createElement('tr');
+                    
+                    // Calculate days until expiry
+                    const expiryDate = new Date(result.not_after);
+                    const now = new Date();
+                    const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                    
+                    // Determine status and styling
+                    let statusClass, status;
+                    if (daysUntilExpiry <= 0) {
+                        statusClass = 'table-danger';
+                        status = 'Expired';
+                        globalStats.expired++;
+                    } else if (daysUntilExpiry <= 90) {
+                        statusClass = 'table-warning';
+                        status = 'Expiring Soon';
+                        globalStats.expiringSoon++;
+                    } else if (!result.valid) {
+                        statusClass = 'table-danger';
+                        status = 'Invalid';
+                        globalStats.invalid++;
                     } else {
-                        globalStats.failed++;
-                        const failuresBody = document.querySelector('#failuresTable tbody');
-                        const row = document.createElement('tr');
-                        row.className = 'table-secondary';
-                        row.innerHTML = `
-                            <td>${result.ip}</td>
-                            <td>Failed</td>
-                            <td>${result.error || 'No Certificate'}</td>
-                        `;
-                        failuresBody.appendChild(row);
+                        statusClass = 'table-success';
+                        status = 'Valid';
+                        globalStats.valid++;
                     }
-                });
-
-                // Update UI with current totals
-                updateUIWithStats();
-
-                // Process next batch if there are more results
-                if (endIdx < results.length) {
-                    setTimeout(() => processResultsBatch(endIdx), 0);
+                    
+                    row.className = statusClass;
+                    row.innerHTML = `
+                        <td>${result.ip}</td>
+                        <td>${status}</td>
+                        <td>${result.common_name || 'N/A'}</td>
+                        <td>${result.sans ? result.sans.join(', ') : 'N/A'}</td>
+                        <td>${result.issuer || 'N/A'}</td>
+                        <td>${expiryDate.toLocaleDateString()}</td>
+                        <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
+                    `;
+                    certsBody.appendChild(row);
+                } else {
+                    globalStats.failed++;
+                    const failuresBody = document.querySelector('#failuresTable tbody');
+                    const row = document.createElement('tr');
+                    row.className = 'table-secondary';
+                    row.innerHTML = `
+                        <td>${result.ip}</td>
+                        <td>Failed</td>
+                        <td>${result.error || 'No Certificate'}</td>
+                    `;
+                    failuresBody.appendChild(row);
                 }
-            };
+            });
 
-            // Start processing first batch
-            processResultsBatch(0);
+            // Update UI with current totals
+            updateUIWithStats();
         }
 
         // Separate UI updates
@@ -603,7 +621,8 @@
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
                             try {
-                                const data = JSON.parse(line.slice(6));
+                                const jsonStr = line.slice(6);
+                                const data = JSON.parse(jsonStr);
                                 
                                 if (data.error) {
                                     statusText.textContent = `Error: ${data.error}`;
@@ -627,6 +646,8 @@
                                 }
                             } catch (e) {
                                 console.error('Error parsing update:', e);
+                                // Continue processing other sites
+                                continue;
                             }
                         }
                     }
@@ -738,27 +759,159 @@
             }
         });
 
-        // Add export functionality
-        document.getElementById('exportBtn').addEventListener('click', function() {
-            // Create workbook with two sheets
-            const wb = XLSX.utils.book_new();
-            
-            // Export certificates table
-            const certsTable = document.getElementById('certsTable');
-            const wsFound = XLSX.utils.table_to_sheet(certsTable);
-            XLSX.utils.book_append_sheet(wb, wsFound, "Found Certificates");
-            
-            // Export failures table
-            const failuresTable = document.getElementById('failuresTable');
-            const wsFailed = XLSX.utils.table_to_sheet(failuresTable);
-            XLSX.utils.book_append_sheet(wb, wsFailed, "Failed/No Certificates");
-            
-            // Save the file
-            XLSX.writeFile(wb, "certificate_scan_results.xlsx");
-        });
-    </script>
+        // Export functionality
+        const exportHandlers = {
+            excel: function() {
+                const wb = XLSX.utils.book_new();
+                
+                // Process certificates
+                const certsData = Array.from(document.querySelectorAll('#certsTable tbody tr')).map(row => ({
+                    'IP': row.cells[0].textContent,
+                    'Status': row.cells[1].textContent,
+                    'Common Name': row.cells[2].textContent,
+                    'Alternative Names': row.cells[3].textContent,
+                    'Issuer': row.cells[4].textContent,
+                    'Expiry Date': row.cells[5].textContent,
+                    'Days Until Expiry': row.cells[6].textContent
+                }));
+                
+                if (certsData.length > 0) {
+                    const wsFound = XLSX.utils.json_to_sheet(certsData);
+                    XLSX.utils.book_append_sheet(wb, wsFound, "Found Certificates");
+                }
+                
+                // Process failures
+                const failuresData = Array.from(document.querySelectorAll('#failuresTable tbody tr')).map(row => ({
+                    'Target': row.cells[0].textContent,
+                    'Status': row.cells[1].textContent,
+                    'Error': row.cells[2].textContent
+                }));
+                
+                if (failuresData.length > 0) {
+                    const wsFailed = XLSX.utils.json_to_sheet(failuresData);
+                    XLSX.utils.book_append_sheet(wb, wsFailed, "Failed/No Certificates");
+                }
+                
+                // Add summary sheet
+                const summaryData = [{
+                    'Total Scanned': document.getElementById('total-count').textContent,
+                    'Valid': document.getElementById('valid-count').textContent,
+                    'Expiring Soon': document.getElementById('expiring-soon-count').textContent,
+                    'Expired': document.getElementById('expired-count').textContent,
+                    'Invalid': document.getElementById('invalid-count').textContent,
+                    'Failed': document.getElementById('failed-count').textContent
+                }];
+                
+                const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+                XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+                
+                // Save the file
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                XLSX.writeFile(wb, `certificate_scan_${timestamp}.xlsx`);
+            },
 
-    <!-- Add SheetJS for Excel export -->
-    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+            text: function() {
+                let output = "Certificate Scan Results\n";
+                output += "======================\n\n";
+                
+                // Add Summary
+                output += "Summary:\n";
+                output += "---------\n";
+                output += `Total Scanned: ${document.getElementById('total-count').textContent}\n`;
+                output += `Valid: ${document.getElementById('valid-count').textContent}\n`;
+                output += `Expiring Soon: ${document.getElementById('expiring-soon-count').textContent}\n`;
+                output += `Expired: ${document.getElementById('expired-count').textContent}\n`;
+                output += `Invalid: ${document.getElementById('invalid-count').textContent}\n`;
+                output += `Failed: ${document.getElementById('failed-count').textContent}\n\n`;
+                
+                // Add Certificates
+                output += "Found Certificates:\n";
+                output += "-------------------\n";
+                document.querySelectorAll('#certsTable tbody tr').forEach(row => {
+                    output += `IP: ${row.cells[0].textContent}\n`;
+                    output += `Status: ${row.cells[1].textContent}\n`;
+                    output += `Common Name: ${row.cells[2].textContent}\n`;
+                    output += `Alternative Names: ${row.cells[3].textContent}\n`;
+                    output += `Issuer: ${row.cells[4].textContent}\n`;
+                    output += `Expiry Date: ${row.cells[5].textContent}\n`;
+                    output += `Days Until Expiry: ${row.cells[6].textContent}\n`;
+                    output += "-------------------\n";
+                });
+                
+                // Add Failures
+                output += "\nFailed/No Certificates:\n";
+                output += "----------------------\n";
+                document.querySelectorAll('#failuresTable tbody tr').forEach(row => {
+                    output += `Target: ${row.cells[0].textContent}\n`;
+                    output += `Status: ${row.cells[1].textContent}\n`;
+                    output += `Error: ${row.cells[2].textContent}\n`;
+                    output += "----------------------\n";
+                });
+                
+                // Create and trigger download
+                const blob = new Blob([output], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `certificate_scan_${timestamp}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            },
+
+            dashboard: function() {
+                const dashboard = document.querySelector('.container').cloneNode(true);
+                const chartDataStr = JSON.stringify(certStatusChart.data).replace(/`/g, '\\`');
+                const chartOptionsStr = JSON.stringify(certStatusChart.options).replace(/`/g, '\\`');
+                
+                const html = `<!DOCTYPE html>
+<html>
+<head>
+    <title>Certificate Scan Dashboard - ${new Date().toLocaleDateString()}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; }
+        .chart-container { height: 300px; }
+    </style>
+</head>
+<body>
+    ${dashboard.outerHTML}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"><\/script>
+    <script>
+        const chartData = ${chartDataStr};
+        const chartOptions = ${chartOptionsStr};
+        const ctx = document.getElementById('certStatusChart');
+        if (ctx) {
+            new Chart(ctx, {
+                type: 'pie',
+                data: chartData,
+                options: chartOptions
+            });
+        }
+    <\/script>
+</body>
+</html>`; // Note the escaped closing script tags
+                
+                const blob = new Blob([html], { type: 'text/html' });
+                const url = window.URL.createObjectURL(blob);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `certificate_dashboard_${timestamp}.html`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            }
+        };
+
+        // Add event listeners
+        document.getElementById('exportExcelBtn').addEventListener('click', exportHandlers.excel);
+        document.getElementById('exportTextBtn').addEventListener('click', exportHandlers.text);
+        document.getElementById('exportDashboardBtn').addEventListener('click', exportHandlers.dashboard);
+    </script>
 </body>
 </html>
