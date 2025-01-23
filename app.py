@@ -687,6 +687,7 @@ def query_ctl():
                     response.raise_for_status()
                     
                     certs = response.json()
+                    domain_results = []
                     
                     for cert in certs:
                         try:
@@ -697,13 +698,17 @@ def query_ctl():
                             
                             if now > not_after:
                                 status = 'Expired'
+                                priority = 1
                             elif now < not_before:
                                 status = 'Not Yet Valid'
+                                priority = 4
                             else:
                                 if days_until_expiry <= 30:
                                     status = 'Expiring Soon'
+                                    priority = 2
                                 else:
                                     status = 'Valid'
+                                    priority = 3
                             
                             result = {
                                 'Domain': domain,
@@ -711,25 +716,24 @@ def query_ctl():
                                 'Status': status,
                                 'Issuer': cert.get('issuer_name', 'Unknown'),
                                 'Expiration Date': not_after.strftime('%Y-%m-%d'),
-                                'Days Until Expiry': str(days_until_expiry)
+                                'Days Until Expiry': str(days_until_expiry),
+                                'priority': priority
                             }
-                            all_results.append(result)
+                            domain_results.append(result)
                             
                         except Exception as e:
                             print(f"Error processing certificate: {str(e)}", flush=True)
                             continue
                     
+                    # Sort domain results by priority
+                    domain_results.sort(key=lambda x: (x['priority'], x.get('Days Until Expiry', 0)))
+                    # Remove priority field before adding to results
+                    for result in domain_results:
+                        del result['priority']
+                    all_results.extend(domain_results)
+                    
                     processed += 1
                     progress = (processed / total) * 100
-                    
-                    # Calculate summary statistics for pie chart
-                    df = pd.DataFrame(all_results)
-                    status_counts = df['Status'].value_counts().to_dict() if not df.empty else {
-                        'Valid': 0,
-                        'Expiring Soon': 0,
-                        'Expired': 0,
-                        'Not Yet Valid': 0
-                    }
                     
                     update = {
                         'progress': progress,
@@ -737,7 +741,6 @@ def query_ctl():
                         'processed': processed,
                         'total': total,
                         'results': all_results,
-                        'status_counts': status_counts,
                         'complete': (processed == total)
                     }
                     
