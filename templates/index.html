@@ -707,7 +707,13 @@
                             try {
                                 const jsonStr = line.slice(6);
                                 const data = JSON.parse(jsonStr);
-                                console.log('Received data:', data);  // Add this log
+                                console.log('Stream update received:', {
+                                    progress: data.progress,
+                                    processed: data.processed,
+                                    total: data.total,
+                                    batchSize: data.results ? data.results.length : 0,
+                                    complete: data.complete
+                                });
                                 
                                 if (data.error) {
                                     statusText.textContent = `Error: ${data.error}`;
@@ -723,21 +729,15 @@
                                 }
                                 
                                 if (data.results) {
-                                    console.log('Processing results batch:', data.results.length);  // Add this log
                                     updateResults(data.results);
                                 }
                                 
                                 if (data.complete) {
-                                    console.log('Received complete signal');  // Add this log
+                                    console.log('Scan completed successfully');
                                     statusText.textContent = 'Scan complete!';
                                 }
                             } catch (e) {
-                                // Only log specific types of errors
-                                if (!e.message.includes('Unterminated string') && 
-                                    !e.message.includes('Expected \':\'') && 
-                                    !e.message.includes('Unexpected end of JSON input')) {
-                                    console.error('Error parsing update:', e);
-                                }
+                                console.error('Parse error on line:', line);
                                 continue;
                             }
                         }
