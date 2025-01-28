@@ -14,7 +14,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var limiter = rate.NewLimiter(rate.Limit(100), 1) // 100 requests per second burst of 1
+var limiter = rate.NewLimiter(rate.Limit(50), 5) // 50 requests per second, burst of 5
 
 type CertResult struct {
 	IP         string    `json:"ip"`
@@ -64,12 +64,40 @@ func scanIP(target string, results chan<- CertResult, wg *sync.WaitGroup) {
 
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{
-			Timeout: 5 * time.Second,
+			Timeout:   10 * time.Second, // Increased timeout
+			KeepAlive: 30 * time.Second, // Added keepalive
 		},
 		"tcp",
 		fmt.Sprintf("%s:443", host),
 		&tls.Config{
 			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS10, // Allow older TLS versions
+			MaxVersion:         tls.VersionTLS13, // Up to latest TLS
+			CipherSuites: []uint16{
+				tls.TLS_RSA_WITH_RC4_128_SHA,
+				tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
+				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA,
+				tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+			}, // Explicitly list all cipher suites
+			Renegotiation: tls.RenegotiateOnceAsClient, // Allow renegotiation
 		},
 	)
 

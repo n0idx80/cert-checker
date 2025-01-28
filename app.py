@@ -520,6 +520,8 @@ def scan_certificates():
                 try:
                     current_time = time.time()
                     result = json.loads(line)
+                    cert_count = len(result.get('certificates', [])) if result.get('certificates') else 0
+                    total_certs += cert_count  # Count actual certificates, not IPs
                     current_batch.append(result)
                     processed += 1
                     
@@ -534,20 +536,19 @@ def scan_certificates():
                     if len(current_batch) >= BATCH_SIZE or processed == total_targets:
                         batch_count += 1
                         batch_elapsed = time.time() - batch_start_time
-                        total_certs += len(current_batch)
                         
                         print(f"\nBatch {batch_count} Statistics:", flush=True)
                         print(f"- Batch size: {len(current_batch)} IPs", flush=True)
-                        print(f"- Certificates found: {len(current_batch)} total", flush=True)
-                        print(f"- Batch processing time: {batch_elapsed:.2f} seconds", flush=True)
-                        print(f"- Average time per IP: {batch_elapsed/len(current_batch):.3f} seconds", flush=True)
+                        print(f"- Certificates found in batch: {cert_count}", flush=True)
                         print(f"- Total certificates so far: {total_certs}", flush=True)
+                        print(f"- Batch processing time: {batch_elapsed:.2f} seconds", flush=True)
                         
                         progress = (processed / total_targets) * 100
                         update = {
                             'progress': progress,
                             'processed': processed,
                             'total': total_targets,
+                            'total_certificates': total_certs,  # Add total certificates to update
                             'results': current_batch,
                             'complete': processed == total_targets
                         }
