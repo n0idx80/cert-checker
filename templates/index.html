@@ -503,7 +503,7 @@
 
         // Modify updateResults to handle batches
         function updateResults(results) {
-            console.log('Raw results received:', JSON.stringify(results, null, 2));
+            console.log('Starting to process results batch');
             
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
@@ -570,6 +570,9 @@
                         <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
                     `;
                     certsBody.appendChild(row);
+                    
+                    // After updating globalStats
+                    console.log('Updated global stats:', {...globalStats});
                 } else {
                     globalStats.failed++;
                     const failuresBody = document.querySelector('#failuresTable tbody');
@@ -704,6 +707,7 @@
                             try {
                                 const jsonStr = line.slice(6);
                                 const data = JSON.parse(jsonStr);
+                                console.log('Received data:', data);  // Add this log
                                 
                                 if (data.error) {
                                     statusText.textContent = `Error: ${data.error}`;
@@ -719,10 +723,12 @@
                                 }
                                 
                                 if (data.results) {
+                                    console.log('Processing results batch:', data.results.length);  // Add this log
                                     updateResults(data.results);
                                 }
                                 
                                 if (data.complete) {
+                                    console.log('Received complete signal');  // Add this log
                                     statusText.textContent = 'Scan complete!';
                                 }
                             } catch (e) {

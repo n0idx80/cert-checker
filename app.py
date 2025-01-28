@@ -481,6 +481,9 @@ def scan_certificates():
         batch_start_time = time.time()
         batch_count = 0
         total_certs = 0
+        processed = 0
+        current_batch = []
+        last_progress_time = time.time()
         
         try:
             print("Creating temporary file...", flush=True)
@@ -502,7 +505,6 @@ def scan_certificates():
             print(f"Found {total_targets} targets to process", flush=True)
             print("Starting scanner process...", flush=True)
             
-            # Start the scanner process
             process = subprocess.Popen(
                 ['./cert_scanner', temp_path],
                 stdout=subprocess.PIPE,
@@ -515,22 +517,21 @@ def scan_certificates():
             processed = 0
             current_batch = []
             last_progress_time = time.time()
+            total_certs = 0
             
             for line in process.stdout:
                 try:
                     current_time = time.time()
                     result = json.loads(line)
-                    cert_count = len(result.get('certificates', [])) if result.get('certificates') else 0
-                    total_certs += cert_count  # Count actual certificates, not IPs
+                    cert_count = 1 if result.get('has_cert', False) else 0
+                    total_certs += cert_count
                     current_batch.append(result)
                     processed += 1
                     
-                    # Print progress every 5 seconds
-                    if current_time - last_progress_time >= 5:
-                        elapsed = current_time - start_time
-                        rate = processed / elapsed if elapsed > 0 else 0
-                        print(f"Progress: {processed}/{total_targets} ({processed/total_targets*100:.2f}%) - Rate: {rate:.2f} IPs/sec", flush=True)
-                        last_progress_time = current_time
+                    # Print progress for every result
+                    elapsed = current_time - start_time
+                    rate = processed / elapsed if elapsed > 0 else 0
+                    print(f"Progress: {processed}/{total_targets} ({processed/total_targets*100:.2f}%) - Rate: {rate:.2f} IPs/sec", flush=True)
                     
                     # Send batch when it reaches size or is last item
                     if len(current_batch) >= BATCH_SIZE or processed == total_targets:
