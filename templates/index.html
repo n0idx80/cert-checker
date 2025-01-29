@@ -539,55 +539,60 @@
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
 
-            // Store current stats before processing new batch
-            const currentStats = {
-                valid: globalStats.valid,
-                expiringSoon: globalStats.expiringSoon,
-                expired: globalStats.expired,
-                invalid: globalStats.invalid,
-                failed: globalStats.failed
-            };
+            // Get all existing rows from the certificates table
+            const certsBody = document.querySelector('#certsTable tbody');
+            const existingRows = Array.from(certsBody.children);
+            certsBody.innerHTML = ''; // Clear the table
 
-            // Reset only the batch counts, not the global counts
-            let batchStats = {
-                valid: 0,
-                expiringSoon: 0,
-                expired: 0,
-                invalid: 0,
-                failed: 0
-            };
+            // Process new results and combine with existing
+            const allResults = [...existingRows.map(row => {
+                const cells = row.cells;
+                return {
+                    element: row,
+                    status: cells[1].textContent,
+                    daysUntilExpiry: cells[6].textContent.includes('Expired') ? -999999 : 
+                                    parseInt(cells[6].textContent.split(' ')[0])
+                };
+            }), ...results.map(result => {
+                if (!result.has_cert) return null;
+                const expiryDate = new Date(result.not_after || result.expiry_date);
+                const now = new Date();
+                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                return {
+                    result,
+                    daysUntilExpiry,
+                    isNew: true
+                };
+            }).filter(x => x)];
 
-            // Sort and process results...
-            results.forEach(result => {
-                if (result.has_cert) {
-                    const certsBody = document.querySelector('#certsTable tbody');
-                    const row = document.createElement('tr');
-                    
+            // Sort all results
+            allResults.sort((a, b) => {
+                const aDays = a.daysUntilExpiry;
+                const bDays = b.daysUntilExpiry;
+
+                // Expired certificates first (negative days or 'Expired')
+                if (aDays <= 0 && bDays > 0) return -1;
+                if (bDays <= 0 && aDays > 0) return 1;
+
+                // Then expiring soon (≤ 90 days)
+                if (aDays <= 90 && bDays > 90) return -1;
+                if (bDays <= 90 && aDays > 90) return 1;
+
+                // Within same category, sort by days ascending
+                return aDays - bDays;
+            });
+
+            // Add sorted rows back to table
+            allResults.forEach(item => {
+                if (item.isNew) {
+                    // Create new row for new result
+                    const result = item.result;
+                    const daysUntilExpiry = item.daysUntilExpiry;
                     const expiryDate = new Date(result.not_after || result.expiry_date);
                     const now = new Date();
-                    const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                    
-                    let statusClass, status;
-                    if (daysUntilExpiry <= 0) {
-                        statusClass = 'table-danger';
-                        status = 'Expired';
-                        batchStats.expired++;
-                    } else if (daysUntilExpiry <= 90) {
-                        statusClass = 'table-warning';
-                        status = 'Expiring Soon';
-                        batchStats.expiringSoon++;
-                    } else if (!result.valid) {
-                        statusClass = 'table-danger';
-                        status = 'Invalid';
-                        batchStats.invalid++;
-                    } else {
-                        statusClass = 'table-success';
-                        status = 'Valid';
-                        batchStats.valid++;
-                    }
-                    
-                    row.className = statusClass;
-                    row.innerHTML = `
+                    const statusClass = daysUntilExpiry <= 0 ? 'table-danger' : daysUntilExpiry <= 90 ? 'table-warning' : 'table-success';
+                    const status = daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry <= 90 ? 'Expiring Soon' : 'Valid';
+                    const rowHTML = `
                         <td>${result.ip || result.domain}</td>
                         <td>${status}</td>
                         <td>${result.common_name || 'N/A'}</td>
@@ -600,27 +605,23 @@
                         <td>${expiryDate.toLocaleDateString()}</td>
                         <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
                     `;
+                    const row = document.createElement('tr');
+                    row.className = statusClass;
+                    row.innerHTML = rowHTML;
                     certsBody.appendChild(row);
                 } else {
-                    batchStats.failed++;
-                    const failuresBody = document.querySelector('#failuresTable tbody');
-                    const row = document.createElement('tr');
-                    row.className = 'table-secondary';
-                    row.innerHTML = `
-                        <td>${result.ip || result.domain}</td>
-                        <td>Failed</td>
-                        <td>${result.error || 'No Certificate'}</td>
-                    `;
-                    failuresBody.appendChild(row);
+                    // Re-add existing row
+                    certsBody.appendChild(item.element);
                 }
             });
 
-            // Update global stats by adding batch stats to current stats
-            globalStats.valid = currentStats.valid + batchStats.valid;
-            globalStats.expiringSoon = currentStats.expiringSoon + batchStats.expiringSoon;
-            globalStats.expired = currentStats.expired + batchStats.expired;
-            globalStats.invalid = currentStats.invalid + batchStats.invalid;
-            globalStats.failed = currentStats.failed + batchStats.failed;
+            // Update stats
+            globalStats.total = allResults.length;
+            globalStats.valid = allResults.filter(item => item.status === 'Valid').length;
+            globalStats.expiringSoon = allResults.filter(item => item.status === 'Expiring Soon').length;
+            globalStats.expired = allResults.filter(item => item.status === 'Expired').length;
+            globalStats.invalid = allResults.filter(item => item.status === 'Invalid').length;
+            globalStats.failed = allResults.filter(item => item.status === 'Failed').length;
 
             // Update UI with accumulated totals
             updateUIWithStats();
