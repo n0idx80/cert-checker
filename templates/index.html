@@ -510,27 +510,42 @@
         function updateResults(results) {
             console.log('Starting to process results batch');
             
+            // Reset counts for this batch
+            const previousFailed = globalStats.failed;
+            globalStats.valid = 0;
+            globalStats.expiringSoon = 0;
+            globalStats.expired = 0;
+            globalStats.invalid = 0;
+            globalStats.failed = 0;
+
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
 
-            // Sort the results by priority (expired -> expiring soon -> valid)
+            // Sort the results by priority
             results.sort((a, b) => {
+                // First, handle cases where one or both don't have certificates
                 if (!a.has_cert && !b.has_cert) return 0;
                 if (!a.has_cert) return 1;
                 if (!b.has_cert) return -1;
 
-                const aExpiryDate = new Date(a.not_after);
-                const bExpiryDate = new Date(b.not_after);
+                // For entries with certificates, calculate days until expiry
+                const aExpiryDate = new Date(a.not_after || a.expiry_date); // Handle both IP and domain formats
+                const bExpiryDate = new Date(b.not_after || b.expiry_date);
                 const now = new Date();
                 const aDaysUntilExpiry = Math.ceil((aExpiryDate - now) / (1000 * 60 * 60 * 24));
                 const bDaysUntilExpiry = Math.ceil((bExpiryDate - now) / (1000 * 60 * 60 * 24));
 
-                // Priority order: expired (≤ 0 days) -> expiring soon (≤ 90 days) -> valid
-                if (aDaysUntilExpiry <= 0 && bDaysUntilExpiry > 0) return -1;
-                if (bDaysUntilExpiry <= 0 && aDaysUntilExpiry > 0) return 1;
-                if (aDaysUntilExpiry <= 90 && bDaysUntilExpiry > 90) return -1;
-                if (bDaysUntilExpiry <= 90 && aDaysUntilExpiry > 90) return 1;
-                return aDaysUntilExpiry - bDaysUntilExpiry; // Sort by days until expiry within each category
+                // Priority order:
+                // 1. Expired (≤ 0 days)
+                // 2. Expiring soon (≤ 90 days)
+                // 3. Valid (> 90 days)
+                if (aDaysUntilExpiry <= 0 && bDaysUntilExpiry > 0) return -1;  // a is expired, b is not
+                if (bDaysUntilExpiry <= 0 && aDaysUntilExpiry > 0) return 1;   // b is expired, a is not
+                if (aDaysUntilExpiry <= 90 && bDaysUntilExpiry > 90) return -1; // a expiring soon, b is not
+                if (bDaysUntilExpiry <= 90 && aDaysUntilExpiry > 90) return 1;  // b expiring soon, a is not
+                
+                // Within same category, sort by days until expiry
+                return aDaysUntilExpiry - bDaysUntilExpiry;
             });
 
             // Process the sorted results
@@ -539,8 +554,8 @@
                     const certsBody = document.querySelector('#certsTable tbody');
                     const row = document.createElement('tr');
                     
-                    // Calculate days until expiry
-                    const expiryDate = new Date(result.not_after);
+                    // Calculate days until expiry, handling both IP and domain formats
+                    const expiryDate = new Date(result.not_after || result.expiry_date);
                     const now = new Date();
                     const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
                     
@@ -566,7 +581,7 @@
                     
                     row.className = statusClass;
                     row.innerHTML = `
-                        <td>${result.ip}</td>
+                        <td>${result.ip || result.domain}</td>
                         <td>${status}</td>
                         <td>${result.common_name || 'N/A'}</td>
                         <td>${result.sans ? result.sans.join(', ') : 'N/A'}</td>
@@ -575,22 +590,22 @@
                         <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
                     `;
                     certsBody.appendChild(row);
-                    
-                    // After updating globalStats
-                    console.log('Updated global stats:', {...globalStats});
                 } else {
                     globalStats.failed++;
                     const failuresBody = document.querySelector('#failuresTable tbody');
                     const row = document.createElement('tr');
                     row.className = 'table-secondary';
                     row.innerHTML = `
-                        <td>${result.ip}</td>
+                        <td>${result.ip || result.domain}</td>
                         <td>Failed</td>
                         <td>${result.error || 'No Certificate'}</td>
                     `;
                     failuresBody.appendChild(row);
                 }
             });
+
+            // Add back the previous failed count
+            globalStats.failed += previousFailed;
 
             // Update UI with current totals
             updateUIWithStats();
@@ -724,10 +739,15 @@
                                     const progressBar = document.getElementById('progressBar');
                                     progressBar.style.width = `${progress}%`;
                                     progressBar.textContent = `${progress}%`;
-                                    statusText.textContent = `Scanning... ${data.processed} of ${data.total} targets`;
+                                    
+                                    // Update status text based on whether scan is complete
+                                    if (data.complete) {
+                                        statusText.textContent = `Scanned ${data.total} assets`;
+                                    } else {
+                                        statusText.textContent = `Scanning... ${data.processed} of ${data.total} targets`;
+                                    }
                                     
                                     globalStats.total = data.total;
-                                    globalStats.failed = data.processed;
                                     updateUIWithStats();
                                 }
 
@@ -739,14 +759,11 @@
                                 // Handle completion
                                 if (data.complete) {
                                     progressBar.classList.remove('progress-bar-animated');
-                                    statusText.textContent = 'Scan complete!';
                                     console.log('Scan completed successfully');
                                 }
                             } catch (e) {
-                                // Only log errors for debugging if needed
-                                if (process.env.NODE_ENV === 'development') {
-                                    console.debug('Parse error (development only):', e);
-                                }
+                                // Only log parsing errors in console if needed
+                                console.debug('Parse error:', e);
                             }
                         }
                     }
@@ -1096,11 +1113,8 @@
                                 statusText.textContent = 'CT Log query complete!';
                             }
                         } catch (e) {
-                            // Only log if it's not a partial update
-                            if (line.includes('"complete":true')) {
-                                console.debug('Skipping partial update');
-                            }
-                            continue;
+                            // Only log parsing errors in console if needed
+                            console.debug('Parse error:', e);
                         }
                     }
                 }

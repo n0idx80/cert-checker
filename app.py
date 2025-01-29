@@ -473,6 +473,7 @@ def scan_certificates():
         file_data = request.files['file'].read()
         print(f"Received file upload of size: {len(file_data)} bytes", flush=True)
     text_data = request.form.get('targets', '')
+    input_type = request.form.get('type', 'ip')  # Get the input type, default to 'ip'
     
     def generate():
         temp_path = None
@@ -505,8 +506,14 @@ def scan_certificates():
             print(f"Found {total_targets} targets to process", flush=True)
             print("Starting scanner process...", flush=True)
             
+            # Add input type flag to scanner command
+            scanner_cmd = ['./cert_scanner']
+            if input_type == 'domain':
+                scanner_cmd.append('--domain')  # Add this flag if your scanner supports it
+            scanner_cmd.append(temp_path)
+            
             process = subprocess.Popen(
-                ['./cert_scanner', temp_path],
+                scanner_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=1,
