@@ -462,7 +462,7 @@ def test_domain(domain):
 
 @app.route('/scan_certificates', methods=['POST'])
 def scan_certificates():
-    BATCH_SIZE = 1000
+    BATCH_SIZE = 200
     
     print("\n=== Starting Certificate Scan ===", flush=True)
     print(f"Time: {datetime.now()}", flush=True)
@@ -549,11 +549,25 @@ def scan_certificates():
                             'progress': progress,
                             'processed': processed,
                             'total': total_targets,
-                            'total_certificates': total_certs,  # Add total certificates to update
+                            'total_certificates': total_certs,
                             'results': current_batch,
                             'complete': processed == total_targets
                         }
-                        yield f'data: {json.dumps(update)}\n\n'
+                        
+                        try:
+                            json_data = json.dumps(update)
+                            yield f'data: {json_data}\n\n'
+                        except Exception as e:
+                            print(f"Error serializing JSON update: {str(e)}", flush=True)
+                            # Try sending update without results if full serialization fails
+                            try:
+                                minimal_update = {**update}
+                                minimal_update['results'] = []
+                                json_data = json.dumps(minimal_update)
+                                yield f'data: {json_data}\n\n'
+                            except Exception as e2:
+                                print(f"Error sending minimal update: {str(e2)}", flush=True)
+                        
                         current_batch = []
                         batch_start_time = time.time()
                         
@@ -570,6 +584,22 @@ def scan_certificates():
             print(f"Total certificates found: {total_certs}", flush=True)
             print(f"Average rate: {total_targets/total_time:.2f} IPs/sec", flush=True)
             print(f"Average certificates per IP: {total_certs/processed:.2f}", flush=True)
+            
+            # Send final update if there are remaining results
+            if current_batch:
+                final_update = {
+                    'progress': 100,
+                    'processed': processed,
+                    'total': total_targets,
+                    'total_certificates': total_certs,
+                    'results': current_batch,
+                    'complete': True
+                }
+                try:
+                    json_data = json.dumps(final_update)
+                    yield f'data: {json_data}\n\n'
+                except Exception as e:
+                    print(f"Error serializing final update: {str(e)}", flush=True)
             
         except Exception as e:
             print(f"Error in scan_certificates: {str(e)}", flush=True)
