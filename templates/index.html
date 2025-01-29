@@ -697,18 +697,25 @@
                 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
+                let buffer = '';
                 
                 while (true) {
                     const {value, done} = await reader.read();
                     if (done) break;
                     
-                    const text = decoder.decode(value);
-                    const lines = text.split('\n');
+                    buffer += decoder.decode(value, {stream: true});
                     
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
+                    // Look for complete messages
+                    while (true) {
+                        const endIndex = buffer.indexOf('\n\n');
+                        if (endIndex === -1) break;
+                        
+                        const message = buffer.slice(0, endIndex);
+                        buffer = buffer.slice(endIndex + 2);
+                        
+                        if (message.startsWith('data: ')) {
                             try {
-                                const jsonStr = line.slice(6);  // Remove 'data: ' prefix
+                                const jsonStr = message.slice(6).trim();
                                 const data = JSON.parse(jsonStr);
                                 
                                 // Handle progress updates
@@ -724,22 +731,22 @@
                                     updateUIWithStats();
                                 }
 
-                                // Process results including timeouts
-                                if (data.results) {
+                                // Process results
+                                if (data.results && data.results.length > 0) {
                                     updateResults(data.results);
                                 }
 
                                 // Handle completion
-                                if (data.complete || progress === 100) {
+                                if (data.complete) {
                                     progressBar.classList.remove('progress-bar-animated');
                                     statusText.textContent = 'Scan complete!';
                                     console.log('Scan completed successfully');
                                 }
                             } catch (e) {
-                                // Only log the first part of the line to avoid console spam
-                                const truncatedLine = line.substring(0, 100) + '...';
-                                console.error('Parse error on line:', truncatedLine);
-                                continue;
+                                // Only log errors for debugging if needed
+                                if (process.env.NODE_ENV === 'development') {
+                                    console.debug('Parse error (development only):', e);
+                                }
                             }
                         }
                     }

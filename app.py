@@ -556,15 +556,49 @@ def scan_certificates():
                         
                         try:
                             json_data = json.dumps(update)
-                            yield f'data: {json_data}\n\n'
+                            # Split large updates into smaller chunks if needed
+                            if len(json_data) > 1000000:  # If JSON is larger than ~1MB
+                                # Send the update without the results first
+                                status_update = {
+                                    'progress': progress,
+                                    'processed': processed,
+                                    'total': total_targets,
+                                    'total_certificates': total_certs,
+                                    'results': [],
+                                    'complete': False
+                                }
+                                yield f'data: {json.dumps(status_update)}\n\n'
+                                
+                                # Then send the results in smaller batches
+                                chunk_size = 50  # Adjust this value as needed
+                                for i in range(0, len(current_batch), chunk_size):
+                                    chunk = current_batch[i:i + chunk_size]
+                                    chunk_update = {
+                                        'progress': progress,
+                                        'processed': processed,
+                                        'total': total_targets,
+                                        'total_certificates': total_certs,
+                                        'results': chunk,
+                                        'complete': (processed == total_targets and i + chunk_size >= len(current_batch))
+                                    }
+                                    yield f'data: {json.dumps(chunk_update)}\n\n'
+                            else:
+                                # Send the complete update if it's small enough
+                                yield f'data: {json_data}\n\n'
+                        
                         except Exception as e:
                             print(f"Error serializing JSON update: {str(e)}", flush=True)
-                            # Try sending update without results if full serialization fails
+                            # Send minimal update without results
                             try:
-                                minimal_update = {**update}
-                                minimal_update['results'] = []
-                                json_data = json.dumps(minimal_update)
-                                yield f'data: {json_data}\n\n'
+                                minimal_update = {
+                                    'progress': progress,
+                                    'processed': processed,
+                                    'total': total_targets,
+                                    'total_certificates': total_certs,
+                                    'results': [],
+                                    'complete': processed == total_targets
+                                }
+                                yield f'data: {json.dumps(minimal_update)}\n\n'
                             except Exception as e2:
                                 print(f"Error sending minimal update: {str(e2)}", flush=True)
                         
@@ -597,7 +631,35 @@ def scan_certificates():
                 }
                 try:
                     json_data = json.dumps(final_update)
-                    yield f'data: {json_data}\n\n'
+                    # Split large updates into smaller chunks if needed
+                    if len(json_data) > 1000000:  # If JSON is larger than ~1MB
+                        # Send the update without the results first
+                        status_update = {
+                            'progress': 100,
+                            'processed': processed,
+                            'total': total_targets,
+                            'total_certificates': total_certs,
+                            'results': [],
+                            'complete': False
+                        }
+                        yield f'data: {json.dumps(status_update)}\n\n'
+                        
+                        # Then send the results in smaller batches
+                        chunk_size = 50  # Adjust this value as needed
+                        for i in range(0, len(current_batch), chunk_size):
+                            chunk = current_batch[i:i + chunk_size]
+                            chunk_update = {
+                                'progress': 100,
+                                'processed': processed,
+                                'total': total_targets,
+                                'total_certificates': total_certs,
+                                'results': chunk,
+                                'complete': (processed == total_targets and i + chunk_size >= len(current_batch))
+                            }
+                            yield f'data: {json.dumps(chunk_update)}\n\n'
+                    else:
+                        # Send the complete update if it's small enough
+                        yield f'data: {json_data}\n\n'
                 except Exception as e:
                     print(f"Error serializing final update: {str(e)}", flush=True)
             
