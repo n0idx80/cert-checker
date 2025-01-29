@@ -22,6 +22,42 @@
             margin: 20px;
             display: inline-block;
         }
+        .table-responsive {
+            margin-bottom: 2rem;
+        }
+        
+        .table td {
+            vertical-align: middle;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 0;
+        }
+        
+        .table th {
+            background-color: #f8f9fa;
+        }
+        
+        /* Add tooltip-like hover for truncated content */
+        td.text-truncate:hover {
+            position: relative;
+        }
+        
+        td.text-truncate[title]:hover:after {
+            content: attr(title);
+            position: absolute;
+            left: 0;
+            top: 100%;
+            z-index: 1000;
+            background-color: #fff;
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            white-space: normal;
+            word-wrap: break-word;
+            max-width: 400px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
     </style>
     <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
 </head>
@@ -79,14 +115,6 @@
                     <div class="tab-pane fade show active" id="manual" role="tabpanel" aria-labelledby="manual-tab">
                         <form id="manualForm" class="mt-4">
                             <div class="mb-3">
-                                <label for="inputType" class="form-label">Input Type</label>
-                                <select class="form-select" id="inputType">
-                                    <option value="ip">IP Addresses</option>
-                                    <option value="domain">Domain Names</option>
-                                </select>
-                            </div>
-                            
-                            <div class="mb-3">
                                 <label for="inputData" class="form-label">Enter IPs/Domains (one per line)</label>
                                 <textarea class="form-control" id="inputData" rows="5" placeholder="Enter one IP or domain per line"></textarea>
                             </div>
@@ -136,40 +164,38 @@
                         </div>
 
                         <div class="mt-4">
-                            <div class="row mt-4">
-                                <!-- Successful Certificates -->
-                                <div class="col-md-6">
-                                    <h4>Found Certificates</h4>
-                                    <table id="certsTable" class="table table-striped">
-                                        <thead>
-                                            <tr>
-                                                <th>IP</th>
-                                                <th>Status</th>
-                                                <th>Common Name</th>
-                                                <th>Alternative Names</th>
-                                                <th>Issuer</th>
-                                                <th>Expiry Date</th>
-                                                <th>Days Until Expiry</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody></tbody>
-                                    </table>
-                                </div>
-                                
-                                <!-- Failed/No Certificates -->
-                                <div class="col-md-6">
-                                    <h4>Failed/No Certificates</h4>
-                                    <table id="failuresTable" class="table table-striped">
-                                        <thead>
-                                            <tr>
-                                                <th>Target</th>
-                                                <th>Status</th>
-                                                <th>Error</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody></tbody>
-                                    </table>
-                                </div>
+                            <!-- Update the Found Certificates table -->
+                            <div class="table-responsive mt-4">
+                                <h3>Found Certificates</h3>
+                                <table id="certsTable" class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 15%">Target</th>
+                                            <th style="width: 10%">Status</th>
+                                            <th style="width: 15%">Common Name</th>
+                                            <th style="width: 30%">Alternative Names</th>
+                                            <th style="width: 15%">Issuer</th>
+                                            <th style="width: 8%">Expiry</th>
+                                            <th style="width: 7%">Days</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                            
+                            <!-- Update the Failed/No Certificates table -->
+                            <div class="table-responsive mt-4">
+                                <h3>Failed/No Certificates</h3>
+                                <table id="failuresTable" class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 30%">Target</th>
+                                            <th style="width: 15%">Status</th>
+                                            <th style="width: 55%">Error</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -510,73 +536,54 @@
         function updateResults(results) {
             console.log('Starting to process results batch');
             
-            // Reset counts for this batch
-            const previousFailed = globalStats.failed;
-            globalStats.valid = 0;
-            globalStats.expiringSoon = 0;
-            globalStats.expired = 0;
-            globalStats.invalid = 0;
-            globalStats.failed = 0;
-
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
 
-            // Sort the results by priority
-            results.sort((a, b) => {
-                // First, handle cases where one or both don't have certificates
-                if (!a.has_cert && !b.has_cert) return 0;
-                if (!a.has_cert) return 1;
-                if (!b.has_cert) return -1;
+            // Store current stats before processing new batch
+            const currentStats = {
+                valid: globalStats.valid,
+                expiringSoon: globalStats.expiringSoon,
+                expired: globalStats.expired,
+                invalid: globalStats.invalid,
+                failed: globalStats.failed
+            };
 
-                // For entries with certificates, calculate days until expiry
-                const aExpiryDate = new Date(a.not_after || a.expiry_date); // Handle both IP and domain formats
-                const bExpiryDate = new Date(b.not_after || b.expiry_date);
-                const now = new Date();
-                const aDaysUntilExpiry = Math.ceil((aExpiryDate - now) / (1000 * 60 * 60 * 24));
-                const bDaysUntilExpiry = Math.ceil((bExpiryDate - now) / (1000 * 60 * 60 * 24));
+            // Reset only the batch counts, not the global counts
+            let batchStats = {
+                valid: 0,
+                expiringSoon: 0,
+                expired: 0,
+                invalid: 0,
+                failed: 0
+            };
 
-                // Priority order:
-                // 1. Expired (≤ 0 days)
-                // 2. Expiring soon (≤ 90 days)
-                // 3. Valid (> 90 days)
-                if (aDaysUntilExpiry <= 0 && bDaysUntilExpiry > 0) return -1;  // a is expired, b is not
-                if (bDaysUntilExpiry <= 0 && aDaysUntilExpiry > 0) return 1;   // b is expired, a is not
-                if (aDaysUntilExpiry <= 90 && bDaysUntilExpiry > 90) return -1; // a expiring soon, b is not
-                if (bDaysUntilExpiry <= 90 && aDaysUntilExpiry > 90) return 1;  // b expiring soon, a is not
-                
-                // Within same category, sort by days until expiry
-                return aDaysUntilExpiry - bDaysUntilExpiry;
-            });
-
-            // Process the sorted results
+            // Sort and process results...
             results.forEach(result => {
                 if (result.has_cert) {
                     const certsBody = document.querySelector('#certsTable tbody');
                     const row = document.createElement('tr');
                     
-                    // Calculate days until expiry, handling both IP and domain formats
                     const expiryDate = new Date(result.not_after || result.expiry_date);
                     const now = new Date();
                     const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
                     
-                    // Determine status and styling
                     let statusClass, status;
                     if (daysUntilExpiry <= 0) {
                         statusClass = 'table-danger';
                         status = 'Expired';
-                        globalStats.expired++;
+                        batchStats.expired++;
                     } else if (daysUntilExpiry <= 90) {
                         statusClass = 'table-warning';
                         status = 'Expiring Soon';
-                        globalStats.expiringSoon++;
+                        batchStats.expiringSoon++;
                     } else if (!result.valid) {
                         statusClass = 'table-danger';
                         status = 'Invalid';
-                        globalStats.invalid++;
+                        batchStats.invalid++;
                     } else {
                         statusClass = 'table-success';
                         status = 'Valid';
-                        globalStats.valid++;
+                        batchStats.valid++;
                     }
                     
                     row.className = statusClass;
@@ -584,14 +591,18 @@
                         <td>${result.ip || result.domain}</td>
                         <td>${status}</td>
                         <td>${result.common_name || 'N/A'}</td>
-                        <td>${result.sans ? result.sans.join(', ') : 'N/A'}</td>
+                        <td class="text-truncate" style="max-width: 300px;" title="${result.sans ? result.sans.join(', ') : 'N/A'}">
+                            ${result.sans ? (result.sans.length > 3 ? 
+                                result.sans.slice(0, 3).join(', ') + ` (+${result.sans.length - 3} more...)` : 
+                                result.sans.join(', ')) : 'N/A'}
+                        </td>
                         <td>${result.issuer || 'N/A'}</td>
                         <td>${expiryDate.toLocaleDateString()}</td>
                         <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
                     `;
                     certsBody.appendChild(row);
                 } else {
-                    globalStats.failed++;
+                    batchStats.failed++;
                     const failuresBody = document.querySelector('#failuresTable tbody');
                     const row = document.createElement('tr');
                     row.className = 'table-secondary';
@@ -604,10 +615,14 @@
                 }
             });
 
-            // Add back the previous failed count
-            globalStats.failed += previousFailed;
+            // Update global stats by adding batch stats to current stats
+            globalStats.valid = currentStats.valid + batchStats.valid;
+            globalStats.expiringSoon = currentStats.expiringSoon + batchStats.expiringSoon;
+            globalStats.expired = currentStats.expired + batchStats.expired;
+            globalStats.invalid = currentStats.invalid + batchStats.invalid;
+            globalStats.failed = currentStats.failed + batchStats.failed;
 
-            // Update UI with current totals
+            // Update UI with accumulated totals
             updateUIWithStats();
         }
 
@@ -688,7 +703,6 @@
             statusText.textContent = 'Processing large dataset...';
 
             const formData = new FormData();
-            const inputType = document.getElementById('inputType').value;
             const fileInput = document.getElementById('fileInput');
             const textInput = document.getElementById('inputData');
             
@@ -701,8 +715,6 @@
                 alert('Please either enter targets or upload a file');
                 return;
             }
-            
-            formData.append('type', inputType);
             
             try {
                 const response = await fetch('/scan_certificates', {

@@ -475,6 +475,11 @@ def scan_certificates():
     text_data = request.form.get('targets', '')
     input_type = request.form.get('type', 'ip')  # Get the input type, default to 'ip'
     
+    print(f"Received input type: {input_type}", flush=True)
+    print(f"Form data: {dict(request.form)}", flush=True)
+    if 'file' in request.files:
+        print("File received in request", flush=True)
+    
     def generate():
         temp_path = None
         process = None
@@ -498,6 +503,10 @@ def scan_certificates():
                     f.write(text_data)
             
             print(f"Temporary file created: {temp_path}", flush=True)
+            with open(temp_path, 'r') as f:
+                content = f.read()
+                print(f"File contents ({len(content.splitlines())} lines):", flush=True)
+                print(content[:500] + ('...' if len(content) > 500 else ''), flush=True)
             
             # Count total targets
             with open(temp_path, 'r') as f:
@@ -506,12 +515,11 @@ def scan_certificates():
             print(f"Found {total_targets} targets to process", flush=True)
             print("Starting scanner process...", flush=True)
             
-            # Add input type flag to scanner command
-            scanner_cmd = ['./cert_scanner']
-            if input_type == 'domain':
-                scanner_cmd.append('--domain')  # Add this flag if your scanner supports it
-            scanner_cmd.append(temp_path)
-            
+            # Simplify the scanner command setup
+            scanner_cmd = ['./cert_scanner', temp_path]
+
+            print(f"Executing scanner command: {' '.join(scanner_cmd)}", flush=True)
+
             process = subprocess.Popen(
                 scanner_cmd,
                 stdout=subprocess.PIPE,
@@ -519,8 +527,20 @@ def scan_certificates():
                 bufsize=1,
                 universal_newlines=True
             )
-            
+
             print("Scanner process started", flush=True)
+
+            # Create a thread to read stderr without blocking
+            def read_stderr():
+                for line in process.stderr:
+                    print(f"Scanner stderr: {line.strip()}", flush=True)
+
+            import threading
+            stderr_thread = threading.Thread(target=read_stderr)
+            stderr_thread.daemon = True
+            stderr_thread.start()
+
+            # Continue with the main process output handling
             processed = 0
             current_batch = []
             last_progress_time = time.time()
@@ -618,13 +638,25 @@ def scan_certificates():
                     continue
                 
             # Final statistics
-            total_time = time.time() - start_time
-            print(f"\n=== Scan Complete ===", flush=True)
-            print(f"Total time: {total_time:.2f} seconds", flush=True)
-            print(f"Total IPs processed: {processed}", flush=True)
-            print(f"Total certificates found: {total_certs}", flush=True)
-            print(f"Average rate: {total_targets/total_time:.2f} IPs/sec", flush=True)
-            print(f"Average certificates per IP: {total_certs/processed:.2f}", flush=True)
+            try:
+                total_time = time.time() - start_time
+                print(f"\n=== Scan Complete ===", flush=True)
+                print(f"Total time: {total_time:.2f} seconds", flush=True)
+                print(f"Total IPs/Domains processed: {processed}", flush=True)
+                print(f"Total certificates found: {total_certs}", flush=True)
+                
+                # Add checks to prevent division by zero and invalid calculations
+                if total_time > 0 and processed > 0:
+                    print(f"Average rate: {processed/total_time:.2f} targets/sec", flush=True)
+                    print(f"Average certificates per target: {total_certs/processed:.2f}", flush=True)
+                else:
+                    if processed == 0:
+                        print("No targets were processed successfully", flush=True)
+                    else:
+                        print("Scan completed too quickly to measure rate", flush=True)
+                    
+            except Exception as e:
+                print(f"Error calculating final statistics: {str(e)}", flush=True)
             
             # Send final update if there are remaining results
             if current_batch:
