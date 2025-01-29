@@ -539,89 +539,138 @@
             const summarySection = document.getElementById('summary-section');
             summarySection.style.display = 'flex';
 
-            // Get all existing rows from the certificates table
-            const certsBody = document.querySelector('#certsTable tbody');
-            const existingRows = Array.from(certsBody.children);
-            certsBody.innerHTML = ''; // Clear the table
-
-            // Process new results and combine with existing
-            const allResults = [...existingRows.map(row => {
-                const cells = row.cells;
-                return {
-                    element: row,
-                    status: cells[1].textContent,
-                    daysUntilExpiry: cells[6].textContent.includes('Expired') ? -999999 : 
-                                    parseInt(cells[6].textContent.split(' ')[0])
-                };
-            }), ...results.map(result => {
-                if (!result.has_cert) return null;
-                const expiryDate = new Date(result.not_after || result.expiry_date);
-                const now = new Date();
-                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                return {
-                    result,
-                    daysUntilExpiry,
-                    isNew: true
-                };
-            }).filter(x => x)];
-
-            // Sort all results
-            allResults.sort((a, b) => {
-                const aDays = a.daysUntilExpiry;
-                const bDays = b.daysUntilExpiry;
-
-                // Expired certificates first (negative days or 'Expired')
-                if (aDays <= 0 && bDays > 0) return -1;
-                if (bDays <= 0 && aDays > 0) return 1;
-
-                // Then expiring soon (≤ 90 days)
-                if (aDays <= 90 && bDays > 90) return -1;
-                if (bDays <= 90 && aDays > 90) return 1;
-
-                // Within same category, sort by days ascending
-                return aDays - bDays;
-            });
-
-            // Add sorted rows back to table
-            allResults.forEach(item => {
-                if (item.isNew) {
-                    // Create new row for new result
-                    const result = item.result;
-                    const daysUntilExpiry = item.daysUntilExpiry;
-                    const expiryDate = new Date(result.not_after || result.expiry_date);
-                    const now = new Date();
-                    const statusClass = daysUntilExpiry <= 0 ? 'table-danger' : daysUntilExpiry <= 90 ? 'table-warning' : 'table-success';
-                    const status = daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry <= 90 ? 'Expiring Soon' : 'Valid';
-                    const rowHTML = `
-                        <td>${result.ip || result.domain}</td>
-                        <td>${status}</td>
-                        <td>${result.common_name || 'N/A'}</td>
-                        <td class="text-truncate" style="max-width: 300px;" title="${result.sans ? result.sans.join(', ') : 'N/A'}">
-                            ${result.sans ? (result.sans.length > 3 ? 
-                                result.sans.slice(0, 3).join(', ') + ` (+${result.sans.length - 3} more...)` : 
-                                result.sans.join(', ')) : 'N/A'}
-                        </td>
-                        <td>${result.issuer || 'N/A'}</td>
-                        <td>${expiryDate.toLocaleDateString()}</td>
-                        <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
-                    `;
-                    const row = document.createElement('tr');
-                    row.className = statusClass;
-                    row.innerHTML = rowHTML;
-                    certsBody.appendChild(row);
+            // Split results into certificates and failures
+            const certificates = [];
+            const failures = [];
+            
+            results.forEach(result => {
+                if (result.has_cert) {
+                    certificates.push(result);
                 } else {
-                    // Re-add existing row
-                    certsBody.appendChild(item.element);
+                    failures.push(result);
                 }
             });
 
-            // Update stats
-            globalStats.total = allResults.length;
-            globalStats.valid = allResults.filter(item => item.status === 'Valid').length;
-            globalStats.expiringSoon = allResults.filter(item => item.status === 'Expiring Soon').length;
-            globalStats.expired = allResults.filter(item => item.status === 'Expired').length;
-            globalStats.invalid = allResults.filter(item => item.status === 'Invalid').length;
-            globalStats.failed = allResults.filter(item => item.status === 'Failed').length;
+            // At the start of updateResults, store previous certificate counts
+            const previousStats = {
+                valid: globalStats.valid,
+                expiringSoon: globalStats.expiringSoon,
+                expired: globalStats.expired,
+                invalid: globalStats.invalid,
+                failed: globalStats.failed
+            };
+
+            // Handle certificates (with sorting)
+            if (certificates.length > 0) {
+                const certsBody = document.querySelector('#certsTable tbody');
+                const existingRows = Array.from(certsBody.children);
+                certsBody.innerHTML = ''; // Clear the table
+
+                // Process and sort certificates
+                const allCerts = [...existingRows.map(row => {
+                    const cells = row.cells;
+                    return {
+                        element: row,
+                        status: cells[1].textContent,
+                        daysUntilExpiry: cells[6].textContent.includes('Expired') ? -999999 : 
+                                        parseInt(cells[6].textContent.split(' ')[0])
+                    };
+                }), ...certificates.map(result => ({
+                    result,
+                    daysUntilExpiry: Math.ceil((new Date(result.not_after || result.expiry_date) - new Date()) / (1000 * 60 * 60 * 24)),
+                    isNew: true
+                }))];
+
+                // Sort certificates
+                allCerts.sort((a, b) => {
+                    const aDays = a.daysUntilExpiry;
+                    const bDays = b.daysUntilExpiry;
+                    if (aDays <= 0 && bDays > 0) return -1;
+                    if (bDays <= 0 && aDays > 0) return 1;
+                    if (aDays <= 90 && bDays > 90) return -1;
+                    if (bDays <= 90 && aDays > 90) return 1;
+                    return aDays - bDays;
+                });
+
+                // Add sorted certificates to table
+                allCerts.forEach(item => {
+                    if (item.isNew) {
+                        // Create new certificate row
+                        const result = item.result;
+                        const daysUntilExpiry = item.daysUntilExpiry;
+                        const expiryDate = new Date(result.not_after || result.expiry_date);
+                        const now = new Date();
+                        const statusClass = daysUntilExpiry <= 0 ? 'table-danger' : daysUntilExpiry <= 90 ? 'table-warning' : 'table-success';
+                        const status = daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry <= 90 ? 'Expiring Soon' : 'Valid';
+                        const rowHTML = `
+                            <td>${result.ip || result.domain}</td>
+                            <td>${status}</td>
+                            <td>${result.common_name || 'N/A'}</td>
+                            <td class="text-truncate" style="max-width: 300px;" title="${result.sans ? result.sans.join(', ') : 'N/A'}">
+                                ${result.sans ? (result.sans.length > 3 ? 
+                                    result.sans.slice(0, 3).join(', ') + ` (+${result.sans.length - 3} more...)` : 
+                                    result.sans.join(', ')) : 'N/A'}
+                            </td>
+                            <td>${result.issuer || 'N/A'}</td>
+                            <td>${expiryDate.toLocaleDateString()}</td>
+                            <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
+                        `;
+                        const row = document.createElement('tr');
+                        row.className = statusClass;
+                        row.innerHTML = rowHTML;
+                        certsBody.appendChild(row);
+                    } else {
+                        certsBody.appendChild(item.element);
+                    }
+                });
+            }
+
+            // Handle failures (no sorting needed)
+            if (failures.length > 0) {
+                const failuresBody = document.querySelector('#failuresTable tbody');
+                failures.forEach(result => {
+                    const row = document.createElement('tr');
+                    row.className = 'table-secondary';
+                    row.innerHTML = `
+                        <td>${result.ip || result.domain}</td>
+                        <td>Failed</td>
+                        <td>${result.error || 'No Certificate'}</td>
+                    `;
+                    failuresBody.appendChild(row);
+                });
+            }
+
+            // Update stats by adding new counts to previous totals
+            globalStats.valid = previousStats.valid + certificates.filter(cert => {
+                const expiryDate = new Date(cert.not_after || cert.expiry_date);
+                const now = new Date();
+                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                return daysUntilExpiry > 90 && cert.valid; // Must be both unexpired and valid
+            }).length;
+
+            globalStats.expiringSoon = previousStats.expiringSoon + certificates.filter(cert => {
+                const expiryDate = new Date(cert.not_after || cert.expiry_date);
+                const now = new Date();
+                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                return daysUntilExpiry > 0 && daysUntilExpiry <= 90 && cert.valid; // Must be unexpired and valid
+            }).length;
+
+            globalStats.expired = previousStats.expired + certificates.filter(cert => {
+                const expiryDate = new Date(cert.not_after || cert.expiry_date);
+                const now = new Date();
+                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                return daysUntilExpiry <= 0; // Expired certs are counted here regardless of other validity
+            }).length;
+
+            // Only count as invalid if the cert is not expired but is invalid for other reasons
+            globalStats.invalid = previousStats.invalid + certificates.filter(cert => {
+                const expiryDate = new Date(cert.not_after || cert.expiry_date);
+                const now = new Date();
+                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
+                return daysUntilExpiry > 0 && !cert.valid; // Not expired but invalid for other reasons
+            }).length;
+
+            globalStats.failed = previousStats.failed + failures.length;
 
             // Update UI with accumulated totals
             updateUIWithStats();
@@ -756,11 +805,12 @@
                                     // Update status text based on whether scan is complete
                                     if (data.complete) {
                                         statusText.textContent = `Scanned ${data.total} assets`;
+                                        globalStats.total = data.total;  // Only set final total when complete
                                     } else {
                                         statusText.textContent = `Scanning... ${data.processed} of ${data.total} targets`;
+                                        globalStats.total = data.processed;  // Use processed count for running total
                                     }
                                     
-                                    globalStats.total = data.total;
                                     updateUIWithStats();
                                 }
 
