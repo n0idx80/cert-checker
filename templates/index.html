@@ -944,125 +944,60 @@
                 try {
                     console.log('Starting Excel export...');
                     const wb = XLSX.utils.book_new();
-                    console.log('Created workbook');
                     
-                    // Process certificates
-                    console.log('Processing certificates table...');
-                    const certsTable = document.querySelector('#certsTable tbody');
-                    if (!certsTable) {
-                        console.log('No certificates table found');
-                        throw new Error('Certificates table not found');
+                    // Process CTL certificates
+                    const ctlTable = document.querySelector('#ctlResultsTable tbody');
+                    if (!ctlTable) {
+                        console.log('No CTL results table found');
+                        throw new Error('CTL results table not found');
                     }
                     
-                    const certsData = Array.from(certsTable.querySelectorAll('tr')).map((row, index) => {
-                        console.log(`Processing row ${index + 1}`);
+                    const ctlData = Array.from(ctlTable.querySelectorAll('tr')).map(row => {
                         return {
-                            'IP': row.cells[0]?.textContent || '',
-                            'Status': row.cells[1]?.textContent || '',
-                            'Common Name': row.cells[2]?.textContent || '',
-                            'Alternative Names': row.cells[3]?.textContent || '',
-                            'Issuer': row.cells[4]?.textContent || '',
-                            'Expiry Date': row.cells[5]?.textContent || '',
-                            'Days Until Expiry': row.cells[6]?.textContent || ''
+                            'Domain': row.cells[0]?.textContent || '',
+                            'Common Name': row.cells[1]?.textContent || '',
+                            'Status': row.cells[2]?.textContent || '',
+                            'Issuer': row.cells[3]?.textContent || '',
+                            'Expiration Date': row.cells[4]?.textContent || '',
+                            'Time Until Expiry': row.cells[5]?.textContent || ''
                         };
                     });
                     
-                    console.log(`Found ${certsData.length} certificate entries`);
-                    
-                    if (certsData.length > 0) {
-                        console.log('Creating certificates sheet');
-                        const wsFound = XLSX.utils.json_to_sheet(certsData);
-                        XLSX.utils.book_append_sheet(wb, wsFound, "Valid Certificates");
+                    if (ctlData.length > 0) {
+                        const wsFound = XLSX.utils.json_to_sheet(ctlData);
+                        XLSX.utils.book_append_sheet(wb, wsFound, "CT Log Results");
+                        
+                        console.log('Writing file...');
+                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                        XLSX.writeFile(wb, `ct_log_scan_${timestamp}.xlsx`);
                     } else {
-                        console.log('Creating empty certificates sheet');
-                        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['No certificates found']]), "No Certificates");
+                        alert('No data to export');
                     }
                     
-                    // Process failures
-                    console.log('Processing failures table...');
-                    const failuresTable = document.querySelector('#failuresTable tbody');
-                    if (!failuresTable) {
-                        console.log('No failures table found');
-                    } else {
-                        const failuresData = Array.from(failuresTable.querySelectorAll('tr')).map((row, index) => {
-                            console.log(`Processing failure row ${index + 1}`);
-                            return {
-                                'Target': row.cells[0]?.textContent || '',
-                                'Status': row.cells[1]?.textContent || '',
-                                'Error': row.cells[2]?.textContent || ''
-                            };
-                        });
-                        
-                        console.log(`Found ${failuresData.length} failure entries`);
-                        
-                        if (failuresData.length > 0) {
-                            console.log('Creating failures sheet');
-                            const wsFailed = XLSX.utils.json_to_sheet(failuresData);
-                            XLSX.utils.book_append_sheet(wb, wsFailed, "Failed Certificates");
-                        }
-                    }
-                    
-                    // Add summary sheet
-                    console.log('Creating summary sheet...');
-                    const summaryData = [{
-                        'Total Scanned': document.getElementById('total-count')?.textContent || '0',
-                        'Valid': document.getElementById('valid-count')?.textContent || '0',
-                        'Expiring Soon': document.getElementById('expiring-soon-count')?.textContent || '0',
-                        'Expired': document.getElementById('expired-count')?.textContent || '0',
-                        'Invalid': document.getElementById('invalid-count')?.textContent || '0',
-                        'Failed': document.getElementById('failed-count')?.textContent || '0'
-                    }];
-                    
-                    const wsSummary = XLSX.utils.json_to_sheet(summaryData);
-                    XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
-                    
-                    console.log('Writing file...');
-                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                    XLSX.writeFile(wb, `certificate_scan_${timestamp}.xlsx`);
-                    console.log('Export complete');
                 } catch (error) {
                     console.error('Error exporting to Excel:', error);
-                    console.error('Error stack:', error.stack);
                     alert('Error exporting to Excel. Please check the console for details.');
                 }
             },
 
             text: function() {
-                let output = "Certificate Scan Results\n";
-                output += "======================\n\n";
+                const ctlTable = document.querySelector('#ctlResultsTable tbody');
+                if (!ctlTable || ctlTable.rows.length === 0) {
+                    alert('No data to export');
+                    return;
+                }
+
+                let output = "Certificate Transparency Log Results\n";
+                output += "===================================\n\n";
                 
-                // Add Summary
-                output += "Summary:\n";
-                output += "---------\n";
-                output += `Total Scanned: ${document.getElementById('total-count').textContent}\n`;
-                output += `Valid: ${document.getElementById('valid-count').textContent}\n`;
-                output += `Expiring Soon: ${document.getElementById('expiring-soon-count').textContent}\n`;
-                output += `Expired: ${document.getElementById('expired-count').textContent}\n`;
-                output += `Invalid: ${document.getElementById('invalid-count').textContent}\n`;
-                output += `Failed: ${document.getElementById('failed-count').textContent}\n\n`;
-                
-                // Add Certificates
-                output += "Found Certificates:\n";
-                output += "-------------------\n";
-                document.querySelectorAll('#certsTable tbody tr').forEach(row => {
-                    output += `IP: ${row.cells[0].textContent}\n`;
-                    output += `Status: ${row.cells[1].textContent}\n`;
-                    output += `Common Name: ${row.cells[2].textContent}\n`;
-                    output += `Alternative Names: ${row.cells[3].textContent}\n`;
-                    output += `Issuer: ${row.cells[4].textContent}\n`;
-                    output += `Expiry Date: ${row.cells[5].textContent}\n`;
-                    output += `Days Until Expiry: ${row.cells[6].textContent}\n`;
-                    output += "-------------------\n";
-                });
-                
-                // Add Failures
-                output += "\nFailed/No Certificates:\n";
-                output += "----------------------\n";
-                document.querySelectorAll('#failuresTable tbody tr').forEach(row => {
-                    output += `Target: ${row.cells[0].textContent}\n`;
-                    output += `Status: ${row.cells[1].textContent}\n`;
-                    output += `Error: ${row.cells[2].textContent}\n`;
-                    output += "----------------------\n";
+                Array.from(ctlTable.rows).forEach(row => {
+                    output += `Domain: ${row.cells[0].textContent}\n`;
+                    output += `Common Name: ${row.cells[1].textContent}\n`;
+                    output += `Status: ${row.cells[2].textContent}\n`;
+                    output += `Issuer: ${row.cells[3].textContent}\n`;
+                    output += `Expiration Date: ${row.cells[4].textContent}\n`;
+                    output += `Time Until Expiry: ${row.cells[5].textContent}\n`;
+                    output += "-----------------------------------\n";
                 });
                 
                 // Create and trigger download
@@ -1071,7 +1006,7 @@
                 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `certificate_scan_${timestamp}.txt`;
+                a.download = `ct_log_scan_${timestamp}.txt`;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
