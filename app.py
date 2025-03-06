@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import socket
 from concurrent.futures import ThreadPoolExecutor
 import time
-from crt_checker import process_domain, query_crtsh
+from crt_checker import process_domain, query_crtsh, process_url_list
 import json
 import sys
 from datetime import datetime
@@ -175,9 +175,6 @@ def perform_certificate_scan(domains, name=None, job_id=None):
 
 @app.route('/check_certificates', methods=['POST'])
 def check_certificates():
-    if request.method == 'GET':
-        return jsonify({'error': 'POST method required'}), 405
-    
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     
@@ -186,85 +183,19 @@ def check_certificates():
         return jsonify({'error': 'No file selected'}), 400
 
     try:
-        # Read domains from uploaded file
-        domains = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
-        print(f"Found {len(domains)} domains to process")
+        # Read and normalize URLs
+        urls = [line.decode('utf-8').strip() for line in file.readlines() if line.strip()]
         
         def generate():
-            all_results = []
-            total_domains = len(domains)
-            processed = 0
-            
-            for domain in domains:
-                try:
-                    print(f"Processing domain: {domain}", flush=True)
-                    
-                    # Get certificates for the domain
-                    certs = get_certificates(domain)
-                    
-                    # Format certificates for this domain
-                    domain_results = []
-                    for cert in certs:
-                        domain_results.append({
-                            'Domain': domain,
-                            'Status': cert['status'],
-                            'Issuer': cert['issuer'],
-                            'Time Until Expiry': f"{cert['days_until_expiry']} days",
-                            'Expiration Date': cert['not_after']
-                        })
-                    
-                    all_results.extend(domain_results)
-                    processed += 1
-                    
-                    # Send progress update
-                    update = {
-                        'progress': (processed / total_domains) * 100,
-                        'current_domain': domain,
-                        'processed': processed,
-                        'total': total_domains,
-                        'results': all_results,  # Send all accumulated results
-                        'complete': False
-                    }
-                    
-                    yield f"data: {json.dumps(update)}\n\n"
-                    
-                except Exception as e:
-                    print(f"Error processing domain {domain}: {str(e)}", flush=True)
-                    error_update = {
-                        'error': f"Error processing {domain}: {str(e)}",
-                        'progress': (processed / total_domains) * 100,
-                        'current_domain': domain,
-                        'processed': processed,
-                        'total': total_domains,
-                        'complete': False
-                    }
-                    yield f"data: {json.dumps(error_update)}\n\n"
-                    continue
-            
-            # Send final update
-            final_update = {
-                'progress': 100.0,
-                'current_domain': domains[-1] if domains else None,
-                'processed': total_domains,
-                'total': total_domains,
-                'results': all_results,
-                'complete': True
-            }
-            
-            yield f"data: {json.dumps(final_update)}\n\n"
-    
-        return Response(generate(), mimetype='text/event-stream')
+            # Process URLs and stream results
+            for update in process_url_list(urls):
+                yield f"data: {json.dumps(update)}\n\n"
         
+        return Response(generate(), mimetype='text/event-stream')
+            
     except Exception as e:
-        print(f"Error in main handler: {str(e)}", flush=True)
-        return jsonify({
-            'error': str(e),
-            'progress': 0,
-            'current_domain': None,
-            'processed': 0,
-            'total': 0,
-            'complete': True
-        }), 500
+        print(f"Error in main handler: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/export_results')
 def export_results():

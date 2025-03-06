@@ -10,6 +10,10 @@ import json
 import socket
 import ssl
 import OpenSSL.crypto as crypto
+from urllib.parse import urlparse, urlunparse
+import re
+from openai import OpenAI  # or import your preferred LLM client
+import os
 
 def get_cert_direct(domain, port=443):
     """Directly get certificate from domain"""
@@ -254,6 +258,223 @@ def main():
     print(f"\nTotal execution time: {duration:.2f} seconds")
     print(f"Average time per domain: {(duration/len(domains)):.2f} seconds")
     print(f"Finished at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+def normalize_url(url):
+    """Normalize URLs to a consistent format"""
+    try:
+        # Add scheme if missing
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
+        # Parse URL
+        parsed = urlparse(url)
+        
+        # Clean up the netloc (domain)
+        netloc = parsed.netloc.lower().strip()
+        # Remove extra colons and port numbers if standard
+        if ':' in netloc:
+            domain, port = netloc.split(':')
+            if (parsed.scheme == 'https' and port == '443') or \
+               (parsed.scheme == 'http' and port == '80'):
+                netloc = domain
+                
+        # Remove www. if present
+        if netloc.startswith('www.'):
+            netloc = netloc[4:]
+            
+        # Remove trailing dots
+        netloc = netloc.rstrip('.')
+        
+        # Rebuild URL with only scheme and netloc
+        normalized = urlunparse((
+            parsed.scheme,
+            netloc,
+            '', '', '', ''  # Path, params, query, and fragment are removed
+        ))
+        
+        return normalized.rstrip('/')
+        
+    except Exception as e:
+        print(f"Error normalizing URL {url}: {str(e)}")
+        return None
+
+def check_certificate_status(cert_info):
+    """Check certificate validity and expiration status"""
+    try:
+        current_date = datetime.utcnow()
+        not_after = datetime.strptime(cert_info['not_after'], '%Y-%m-%dT%H:%M:%S')
+        days_until_expiry = (not_after - current_date).days
+        
+        # Determine certificate status
+        if days_until_expiry < 0:
+            return {
+                'status': 'expired',
+                'days_until_expiry': days_until_expiry,
+                'expiry_date': not_after.strftime('%Y-%m-%d'),
+                'issuer': cert_info['issuer_name']
+            }
+        elif days_until_expiry <= 90:
+            return {
+                'status': 'expiring_soon',
+                'days_until_expiry': days_until_expiry,
+                'expiry_date': not_after.strftime('%Y-%m-%d'),
+                'issuer': cert_info['issuer_name']
+            }
+        else:
+            return {
+                'status': 'valid',
+                'days_until_expiry': days_until_expiry,
+                'expiry_date': not_after.strftime('%Y-%m-%d'),
+                'issuer': cert_info['issuer_name']
+            }
+    except Exception as e:
+        return {
+            'status': 'invalid',
+            'error': str(e)
+        }
+
+def validate_url_connection(url, timeout=5):
+    """Test if URL is accessible and validate its certificate"""
+    try:
+        # Suppress insecure request warnings
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        print(f"\nChecking: {url}")
+        response = requests.head(url, 
+                               timeout=timeout, 
+                               allow_redirects=True, 
+                               verify=False)
+        
+        if response.status_code == 200:
+            print(f"✓ Connection successful")
+            
+            # Get and validate certificate
+            try:
+                domain = urlparse(url).netloc
+                cert_info = get_cert_direct(domain)
+                if cert_info:
+                    cert_status = check_certificate_status(cert_info[0])
+                    print(f"Certificate Info:")
+                    print(f"  Status: {cert_status['status'].upper()}")
+                    print(f"  Expiry: {cert_status.get('expiry_date')} ({cert_status.get('days_until_expiry')} days)")
+                    print(f"  Issuer: {cert_status.get('issuer', 'Unknown')}")
+                    return True, cert_status
+                else:
+                    print("✗ No certificate found")
+                    return False, {'status': 'invalid', 'error': 'No certificate found'}
+            except Exception as e:
+                print(f"✗ Certificate validation error: {str(e)}")
+                return False, {'status': 'invalid', 'error': str(e)}
+        else:
+            print(f"✗ Connection failed (HTTP {response.status_code})")
+            return False, {'status': 'invalid', 'error': f'HTTP {response.status_code}'}
+            
+    except requests.exceptions.RequestException as e:
+        print(f"✗ Connection error: {str(e)}")
+        return False, {'status': 'invalid', 'error': str(e)}
+
+def normalize_url_with_llm(url):
+    """Use LLM to intelligently normalize URLs"""
+    try:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in environment")
+            
+        client = OpenAI(api_key=api_key)
+        
+        prompt = f"""
+        Analyze this URL and return the normalized version that would reach the main domain:
+        URL: {url}
+        
+        Rules:
+        1. Remove unnecessary parts (utm params, fragments, etc)
+        2. Fix common typos or formatting issues
+        3. Ensure proper protocol (https://)
+        4. Remove unnecessary subdomains
+        5. Return only the base domain if it's clearly a subpage
+        
+        Return only the normalized URL, nothing else.
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        normalized_url = response.choices[0].message.content.strip()
+        if normalized_url != url:
+            print(f"Normalized: {url} → {normalized_url}")
+        
+        # Validate the normalized URL
+        success, cert_status = validate_url_connection(normalized_url)
+        if success:
+            return normalized_url
+        return None
+            
+    except Exception as e:
+        print(f"Error normalizing URL with LLM: {str(e)}")
+        return None
+
+def process_url_list(urls):
+    """Process a list of URLs and check their certificates"""
+    results = []
+    
+    print(f"\nProcessing {len(urls)} URLs...")
+    for i, url in enumerate(urls):
+        url = url.strip()
+        if not url:
+            continue
+            
+        print(f"\n{'='*50}")
+        print(f"Processing [{i+1}/{len(urls)}]: {url}")
+        
+        result = {
+            'url': url,
+            'status': 'processing',
+            'cert_info': None,
+            'error': None
+        }
+        
+        # First try LLM normalization
+        normalized = normalize_url_with_llm(url)
+        if normalized:
+            print(f"✓ Successfully normalized to: {normalized}")
+            success, cert_status = validate_url_connection(normalized)
+        else:
+            # Fall back to basic normalization
+            print("Falling back to basic normalization...")
+            basic_normalized = normalize_url(url)
+            if basic_normalized:
+                success, cert_status = validate_url_connection(basic_normalized)
+            else:
+                success = False
+                cert_status = {'status': 'invalid', 'error': 'URL normalization failed'}
+        
+        result.update({
+            'normalized_url': normalized or basic_normalized or url,
+            'status': cert_status['status'],
+            'cert_info': cert_status
+        })
+        
+        results.append(result)
+        # Add debug log before yielding
+        print(f"Yielding update for {url} with {len(results)} total results")  # Debug
+        yield {
+            'progress': ((i + 1) / len(urls)) * 100,
+            'current_url': url,
+            'results': results,
+            'total_processed': i + 1,
+            'total_urls': len(urls),
+            'stats': {
+                'valid': sum(1 for r in results if r['status'] == 'valid'),
+                'expiring_soon': sum(1 for r in results if r['status'] == 'expiring_soon'),
+                'expired': sum(1 for r in results if r['status'] == 'expired'),
+                'invalid': sum(1 for r in results if r['status'] == 'invalid')
+            }
+        }
+        
+        print(f"{'='*50}")
 
 if __name__ == "__main__":
     main()

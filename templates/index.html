@@ -115,13 +115,15 @@
                     <div class="tab-pane fade show active" id="manual" role="tabpanel" aria-labelledby="manual-tab">
                         <form id="manualForm" class="mt-4">
                             <div class="mb-3">
-                                <label for="inputData" class="form-label">Enter IPs/Domains (one per line)</label>
-                                <textarea class="form-control" id="inputData" rows="5" placeholder="Enter one IP or domain per line"></textarea>
+                                <label for="inputData" class="form-label">Enter URLs/Domains (one per line)</label>
+                                <textarea class="form-control" id="inputData" rows="5" 
+                                          placeholder="Enter one URL or domain per line"></textarea>
                             </div>
                             
                             <div class="mb-3">
-                                <label for="fileInput" class="form-label">Or upload a file (one IP/domain per line)</label>
-                                <input type="file" class="form-control" id="fileInput" accept=".txt,.csv,.list">
+                                <label for="urlFileInput" class="form-label">Or upload a file (one URL per line)</label>
+                                <input type="file" class="form-control" id="urlFileInput" 
+                                       accept=".txt,.csv,.list">
                             </div>
                             
                             <button type="submit" class="btn btn-primary">Scan Certificates</button>
@@ -532,167 +534,94 @@
         // Change batch size from 1000 to 200
         const BATCH_SIZE = 200; // Process 200 results at a time
 
-        // Modify updateResults to handle batches
-        function updateResults(results) {
-            console.log('Starting to process results batch');
+        // Add these functions before the form event listener
+        function updateProgress(data) {
+            const progressBar = document.getElementById('progressBar');
+            const statusText = document.getElementById('statusText');
             
-            const summarySection = document.getElementById('summary-section');
-            summarySection.style.display = 'flex';
-
-            // Split results into certificates and failures
-            const certificates = [];
-            const failures = [];
+            // Update progress bar
+            const progress = Math.round(data.progress);
+            progressBar.style.width = `${progress}%`;
+            progressBar.textContent = `${progress}%`;
             
-            results.forEach(result => {
-                if (result.has_cert) {
-                    certificates.push(result);
-                } else {
-                    failures.push(result);
-                }
-            });
-
-            // At the start of updateResults, store previous certificate counts
-            const previousStats = {
-                valid: globalStats.valid,
-                expiringSoon: globalStats.expiringSoon,
-                expired: globalStats.expired,
-                invalid: globalStats.invalid,
-                failed: globalStats.failed
-            };
-
-            // Handle certificates (with sorting)
-            if (certificates.length > 0) {
-                const certsBody = document.querySelector('#certsTable tbody');
-                const existingRows = Array.from(certsBody.children);
-                certsBody.innerHTML = ''; // Clear the table
-
-                // Process and sort certificates
-                const allCerts = [...existingRows.map(row => {
-                    const cells = row.cells;
-                    return {
-                        element: row,
-                        status: cells[1].textContent,
-                        daysUntilExpiry: cells[6].textContent.includes('Expired') ? -999999 : 
-                                        parseInt(cells[6].textContent.split(' ')[0])
-                    };
-                }), ...certificates.map(result => ({
-                    result,
-                    daysUntilExpiry: Math.ceil((new Date(result.not_after || result.expiry_date) - new Date()) / (1000 * 60 * 60 * 24)),
-                    isNew: true
-                }))];
-
-                // Sort certificates
-                allCerts.sort((a, b) => {
-                    const aDays = a.daysUntilExpiry;
-                    const bDays = b.daysUntilExpiry;
-                    if (aDays <= 0 && bDays > 0) return -1;
-                    if (bDays <= 0 && aDays > 0) return 1;
-                    if (aDays <= 90 && bDays > 90) return -1;
-                    if (bDays <= 90 && aDays > 90) return 1;
-                    return aDays - bDays;
-                });
-
-                // Add sorted certificates to table
-                allCerts.forEach(item => {
-                    if (item.isNew) {
-                        // Create new certificate row
-                        const result = item.result;
-                        const daysUntilExpiry = item.daysUntilExpiry;
-                        const expiryDate = new Date(result.not_after || result.expiry_date);
-                        const now = new Date();
-                        const statusClass = daysUntilExpiry <= 0 ? 'table-danger' : daysUntilExpiry <= 90 ? 'table-warning' : 'table-success';
-                        const status = daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry <= 90 ? 'Expiring Soon' : 'Valid';
-                        const rowHTML = `
-                            <td>${result.ip || result.domain}</td>
-                            <td>${status}</td>
-                            <td>${result.common_name || 'N/A'}</td>
-                            <td class="text-truncate" style="max-width: 300px;" title="${result.sans ? result.sans.join(', ') : 'N/A'}">
-                                ${result.sans ? (result.sans.length > 3 ? 
-                                    result.sans.slice(0, 3).join(', ') + ` (+${result.sans.length - 3} more...)` : 
-                                    result.sans.join(', ')) : 'N/A'}
-                            </td>
-                            <td>${result.issuer || 'N/A'}</td>
-                            <td>${expiryDate.toLocaleDateString()}</td>
-                            <td>${daysUntilExpiry <= 0 ? 'Expired' : daysUntilExpiry + ' days'}</td>
-                        `;
-                        const row = document.createElement('tr');
-                        row.className = statusClass;
-                        row.innerHTML = rowHTML;
-                        certsBody.appendChild(row);
-                    } else {
-                        certsBody.appendChild(item.element);
-                    }
-                });
-            }
-
-            // Handle failures (no sorting needed)
-            if (failures.length > 0) {
-                const failuresBody = document.querySelector('#failuresTable tbody');
-                failures.forEach(result => {
-                    const row = document.createElement('tr');
-                    row.className = 'table-secondary';
-                    row.innerHTML = `
-                        <td>${result.ip || result.domain}</td>
-                        <td>Failed</td>
-                        <td>${result.error || 'No Certificate'}</td>
-                    `;
-                    failuresBody.appendChild(row);
-                });
-            }
-
-            // Update stats by adding new counts to previous totals
-            globalStats.valid = previousStats.valid + certificates.filter(cert => {
-                const expiryDate = new Date(cert.not_after || cert.expiry_date);
-                const now = new Date();
-                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                return daysUntilExpiry > 90 && cert.valid; // Must be both unexpired and valid
-            }).length;
-
-            globalStats.expiringSoon = previousStats.expiringSoon + certificates.filter(cert => {
-                const expiryDate = new Date(cert.not_after || cert.expiry_date);
-                const now = new Date();
-                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                return daysUntilExpiry > 0 && daysUntilExpiry <= 90 && cert.valid; // Must be unexpired and valid
-            }).length;
-
-            globalStats.expired = previousStats.expired + certificates.filter(cert => {
-                const expiryDate = new Date(cert.not_after || cert.expiry_date);
-                const now = new Date();
-                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                return daysUntilExpiry <= 0; // Expired certs are counted here regardless of other validity
-            }).length;
-
-            // Only count as invalid if the cert is not expired but is invalid for other reasons
-            globalStats.invalid = previousStats.invalid + certificates.filter(cert => {
-                const expiryDate = new Date(cert.not_after || cert.expiry_date);
-                const now = new Date();
-                const daysUntilExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-                return daysUntilExpiry > 0 && !cert.valid; // Not expired but invalid for other reasons
-            }).length;
-
-            globalStats.failed = previousStats.failed + failures.length;
-
-            // Update UI with accumulated totals
-            updateUIWithStats();
+            // Update status text
+            statusText.textContent = `Processing ${data.current_url} (${data.total_processed} of ${data.total_urls})`;
         }
 
-        // Separate UI updates
-        function updateUIWithStats() {
-            // Update summary counts
-            document.getElementById('total-count').textContent = globalStats.total;  // Use backend total directly
-            document.getElementById('valid-count').textContent = globalStats.valid;
-            document.getElementById('expiring-soon-count').textContent = globalStats.expiringSoon;
-            document.getElementById('expired-count').textContent = globalStats.expired;
-            document.getElementById('invalid-count').textContent = globalStats.invalid;
-            document.getElementById('failed-count').textContent = globalStats.failed;
+        function showError(message) {
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = `Error: ${message}`;
+            statusText.style.color = 'red';
+            
+            // Reset progress bar
+            const progressBar = document.getElementById('progressBar');
+            progressBar.style.width = '0%';
+            progressBar.classList.remove('progress-bar-animated');
+        }
 
-            // Update pie chart
-            if (certStatusChart && certStatusChart.data && certStatusChart.data.datasets) {
+        function updateResults(results) {
+            console.log("Updating results:", results);
+            
+            const certsTable = document.querySelector('#certsTable tbody');
+            const failuresTable = document.querySelector('#failuresTable tbody');
+            
+            // Clear existing rows
+            certsTable.innerHTML = '';
+            failuresTable.innerHTML = '';
+            
+            results.forEach(result => {
+                if (result.status === 'invalid' || result.error) {
+                    // Add to failures table
+                    const row = failuresTable.insertRow();
+                    row.innerHTML = `
+                        <td>${result.url}</td>
+                        <td>${result.status}</td>
+                        <td>${result.error || 'Unknown error'}</td>
+                    `;
+                } else {
+                    // Add to certificates table
+                    const row = certsTable.insertRow();
+                    const certInfo = result.cert_info;
+                    row.innerHTML = `
+                        <td>${result.url}</td>
+                        <td>${result.status}</td>
+                        <td>${result.normalized_url || ''}</td>
+                        <td>${certInfo.issuer || ''}</td>
+                        <td>${certInfo.expiry_date || ''}</td>
+                        <td>${certInfo.days_until_expiry || ''}</td>
+                    `;
+                }
+            });
+            
+            // Update summary stats
+            if (results.length > 0) {
+                document.getElementById('summary-section').style.display = 'flex';
+                updateStats(results);
+            }
+        }
+
+        function updateStats(results) {
+            const stats = {
+                valid: results.filter(r => r.status === 'valid').length,
+                expiring_soon: results.filter(r => r.status === 'expiring_soon').length,
+                expired: results.filter(r => r.status === 'expired').length,
+                invalid: results.filter(r => r.status === 'invalid').length
+            };
+            
+            // Update counts
+            document.getElementById('valid-count').textContent = stats.valid;
+            document.getElementById('expiring-soon-count').textContent = stats.expiring_soon;
+            document.getElementById('expired-count').textContent = stats.expired;
+            document.getElementById('invalid-count').textContent = stats.invalid;
+            document.getElementById('total-count').textContent = results.length;
+            
+            // Update chart if it exists
+            if (certStatusChart) {
                 certStatusChart.data.datasets[0].data = [
-                    globalStats.valid,
-                    globalStats.expiringSoon,
-                    globalStats.expired,
-                    globalStats.invalid
+                    stats.valid,
+                    stats.expiring_soon,
+                    stats.expired,
+                    stats.invalid
                 ];
                 certStatusChart.update();
             }
@@ -741,104 +670,70 @@
             initializeTables();
             document.getElementById('summary-section').style.display = 'flex';
             
-            if (certStatusChart && certStatusChart.data && certStatusChart.data.datasets) {
-                certStatusChart.data.datasets[0].data = [0, 0, 0, 0];
-                certStatusChart.update();
-            }
-
-            // Show processing message
-            const progressSection = document.getElementById('progressSection');
-            progressSection.style.display = 'block';
-            const statusText = document.getElementById('statusText');
-            statusText.textContent = 'Processing large dataset...';
-
             const formData = new FormData();
-            const fileInput = document.getElementById('fileInput');
+            const fileInput = document.getElementById('urlFileInput');
             const textInput = document.getElementById('inputData');
             
             // Check if we have a file or text input
             if (fileInput.files.length > 0) {
                 formData.append('file', fileInput.files[0]);
             } else if (textInput.value.trim()) {
-                formData.append('targets', textInput.value.trim());
+                // Create a blob from text input
+                const blob = new Blob([textInput.value], { type: 'text/plain' });
+                formData.append('file', blob, 'urls.txt');
             } else {
-                alert('Please either enter targets or upload a file');
+                alert('Please either enter URLs or upload a file');
                 return;
             }
             
+            // Show processing message
+            const progressSection = document.getElementById('progressSection');
+            progressSection.style.display = 'block';
+            const statusText = document.getElementById('statusText');
+            statusText.textContent = 'Processing URLs...';
+            
             try {
-                const response = await fetch('/scan_certificates', {
+                const response = await fetch('/check_certificates', {
                     method: 'POST',
                     body: formData
                 });
                 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-                let buffer = '';
                 
                 while (true) {
                     const {value, done} = await reader.read();
                     if (done) break;
                     
-                    buffer += decoder.decode(value, {stream: true});
-                    
-                    // Look for complete messages
-                    while (true) {
-                        const endIndex = buffer.indexOf('\n\n');
-                        if (endIndex === -1) break;
+                    const lines = decoder.decode(value).split('\n');
+                    for (const line of lines) {
+                        if (!line.trim() || !line.startsWith('data: ')) continue;
                         
-                        const message = buffer.slice(0, endIndex);
-                        buffer = buffer.slice(endIndex + 2);
+                        console.log("Received SSE update:", line);  // Debug log
                         
-                        if (message.startsWith('data: ')) {
-                            try {
-                                const jsonStr = message.slice(6).trim();
-                                const data = JSON.parse(jsonStr);
-                                
-                                // Handle progress updates
-                                if (data.progress !== undefined) {
-                                    const progress = Math.round(data.progress);
-                                    const progressBar = document.getElementById('progressBar');
-                                    progressBar.style.width = `${progress}%`;
-                                    progressBar.textContent = `${progress}%`;
-                                    
-                                    // Update status text based on whether scan is complete
-                                    if (data.complete) {
-                                        statusText.textContent = `Scanned ${data.total} assets`;
-                                        globalStats.total = data.total;  // Only set final total when complete
-                                    } else {
-                                        statusText.textContent = `Scanning... ${data.processed} of ${data.total} targets`;
-                                        globalStats.total = data.processed;  // Use processed count for running total
-                                    }
-                                    
-                                    updateUIWithStats();
-                                }
-
-                                // Process results
-                                if (data.results && data.results.length > 0) {
-                                    updateResults(data.results);
-                                }
-
-                                // Handle completion
-                                if (data.complete) {
-                                    progressBar.classList.remove('progress-bar-animated');
-                                    console.log('Scan completed successfully');
-                                }
-                            } catch (e) {
-                                // Only log parsing errors in console if needed
-                                console.debug('Parse error:', e);
-                            }
+                        const data = JSON.parse(line.substring(6));
+                        if (data.error) {
+                            console.error("Error:", data.error);  // Debug log
+                            showError(data.error);
+                            return;
+                        }
+                        
+                        console.log("Processing update:", data);  // Debug log
+                        updateProgress(data);
+                        if (data.results) {
+                            console.log("Updating results with:", data.results);  // Debug log
+                            updateResults(data.results);
                         }
                     }
                 }
             } catch (error) {
-                statusText.textContent = `Error: ${error.message}`;
-                console.error('Scan error:', error);
+                console.error("Fetch error:", error);  // Debug log
+                showError('Error processing URLs: ' + error);
             }
         });
 
         // Add file input handler to clear textarea when file is selected
-        document.getElementById('fileInput').addEventListener('change', function(e) {
+        document.getElementById('urlFileInput').addEventListener('change', function(e) {
             if (e.target.files.length > 0) {
                 document.getElementById('inputData').value = '';
             }
@@ -847,7 +742,7 @@
         // Add textarea handler to clear file input when text is entered
         document.getElementById('inputData').addEventListener('input', function(e) {
             if (e.target.value.trim()) {
-                document.getElementById('fileInput').value = '';
+                document.getElementById('urlFileInput').value = '';
             }
         });
 
@@ -1010,7 +905,6 @@
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
             },
 
             dashboard: function() {
