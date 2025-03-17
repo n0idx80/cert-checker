@@ -305,28 +305,20 @@ def check_certificate_status(cert_info):
         not_after = datetime.strptime(cert_info['not_after'], '%Y-%m-%dT%H:%M:%S')
         days_until_expiry = (not_after - current_date).days
         
-        # Determine certificate status
+        # Standardize status values
         if days_until_expiry < 0:
-            return {
-                'status': 'expired',
-                'days_until_expiry': days_until_expiry,
-                'expiry_date': not_after.strftime('%Y-%m-%d'),
-                'issuer': cert_info['issuer_name']
-            }
+            status = 'expired'
         elif days_until_expiry <= 90:
-            return {
-                'status': 'expiring_soon',
-                'days_until_expiry': days_until_expiry,
-                'expiry_date': not_after.strftime('%Y-%m-%d'),
-                'issuer': cert_info['issuer_name']
-            }
+            status = 'expiring_soon'
         else:
-            return {
-                'status': 'valid',
-                'days_until_expiry': days_until_expiry,
-                'expiry_date': not_after.strftime('%Y-%m-%d'),
-                'issuer': cert_info['issuer_name']
-            }
+            status = 'valid'
+            
+        return {
+            'status': status,  # Using standardized lowercase status
+            'days_until_expiry': days_until_expiry,
+            'expiry_date': not_after.strftime('%Y-%m-%d'),
+            'issuer': cert_info['issuer_name']
+        }
     except Exception as e:
         return {
             'status': 'invalid',
@@ -416,9 +408,34 @@ def normalize_url_with_llm(url):
         print(f"Error normalizing URL with LLM: {str(e)}")
         return None
 
+def get_cert_domain_key(url):
+    """Get the key for certificate checking, preserving relevant paths and subdomains"""
+    try:
+        parsed = urlparse(url)
+        # Split domain into parts
+        domain_parts = parsed.netloc.split('.')
+        
+        # If it's a subdomain, keep it
+        if len(domain_parts) > 2:
+            base_domain = '.'.join(domain_parts[-2:])
+            subdomain = '.'.join(domain_parts[:-2])
+            cert_key = f"{subdomain}.{base_domain}"
+        else:
+            cert_key = parsed.netloc
+            
+        # If there's a path that might indicate a different service, include it
+        if parsed.path and len(parsed.path) > 1:
+            cert_key = f"{cert_key}{parsed.path}"
+            
+        return cert_key.lower()
+    except Exception as e:
+        print(f"Error getting cert domain key: {str(e)}")
+        return url.lower()
+
 def process_url_list(urls):
     """Process a list of URLs and check their certificates"""
     results = []
+    processed_urls = {}  # Track normalized URLs by their cert domain key
     
     print(f"\nProcessing {len(urls)} URLs...")
     for i, url in enumerate(urls):
@@ -429,37 +446,58 @@ def process_url_list(urls):
         print(f"\n{'='*50}")
         print(f"Processing [{i+1}/{len(urls)}]: {url}")
         
-        result = {
-            'url': url,
-            'status': 'processing',
-            'cert_info': None,
-            'error': None
-        }
-        
         # First try LLM normalization
         normalized = normalize_url_with_llm(url)
-        if normalized:
-            print(f"✓ Successfully normalized to: {normalized}")
-            success, cert_status = validate_url_connection(normalized)
-        else:
-            # Fall back to basic normalization
+        if not normalized:
             print("Falling back to basic normalization...")
-            basic_normalized = normalize_url(url)
-            if basic_normalized:
-                success, cert_status = validate_url_connection(basic_normalized)
-            else:
-                success = False
-                cert_status = {'status': 'invalid', 'error': 'URL normalization failed'}
+            normalized = normalize_url(url)
         
-        result.update({
-            'normalized_url': normalized or basic_normalized or url,
-            'status': cert_status['status'],
-            'cert_info': cert_status
-        })
+        if not normalized:
+            print(f"✗ Could not normalize URL: {url}")
+            result = {
+                'url': url,
+                'status': 'invalid',
+                'cert_info': {'status': 'invalid', 'error': 'URL normalization failed'},
+                'error': 'URL normalization failed'
+            }
+        else:
+            # Get the certificate domain key
+            cert_key = get_cert_domain_key(normalized)
+            
+            # Check if we've already processed this exact cert domain
+            if cert_key in processed_urls:
+                base_url = processed_urls[cert_key]
+                print(f"⚠ Similar URL already processed: {url} → {normalized}")
+                print(f"  Previously checked as: {base_url}")
+                
+                # If it's not exactly the same URL, check it anyway
+                if normalized != base_url:
+                    print("  Checking for different certificate...")
+                    success, cert_status = validate_url_connection(normalized)
+                    if cert_status != processed_urls.get(f"{base_url}_cert"):
+                        print("  Found different certificate, processing...")
+                    else:
+                        print("  Same certificate found, skipping...")
+                        continue
+                else:
+                    continue
+                
+            processed_urls[cert_key] = normalized
+            print(f"✓ Normalized: {url} → {normalized}")
+            
+            # Now check the certificate
+            success, cert_status = validate_url_connection(normalized)
+            processed_urls[f"{normalized}_cert"] = cert_status
+            result = {
+                'url': url,
+                'normalized_url': normalized,
+                'status': cert_status['status'],
+                'cert_info': cert_status
+            }
         
         results.append(result)
-        # Add debug log before yielding
-        print(f"Yielding update for {url} with {len(results)} total results")  # Debug
+        print(f"Yielding update for {url} with {len(results)} total results")
+        
         yield {
             'progress': ((i + 1) / len(urls)) * 100,
             'current_url': url,
@@ -475,6 +513,11 @@ def process_url_list(urls):
         }
         
         print(f"{'='*50}")
+    
+    print(f"\nProcessing complete:")
+    print(f"- Total URLs: {len(urls)}")
+    print(f"- Unique normalized URLs: {len(processed_urls)}")
+    print(f"- Results: {len(results)}")
 
 if __name__ == "__main__":
     main()

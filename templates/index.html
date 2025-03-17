@@ -569,28 +569,58 @@
             certsTable.innerHTML = '';
             failuresTable.innerHTML = '';
             
-            results.forEach(result => {
-                if (result.status === 'invalid' || result.error) {
-                    // Add to failures table
-                    const row = failuresTable.insertRow();
-                    row.innerHTML = `
-                        <td>${result.url}</td>
-                        <td>${result.status}</td>
-                        <td>${result.error || 'Unknown error'}</td>
-                    `;
-                } else {
-                    // Add to certificates table
-                    const row = certsTable.insertRow();
-                    const certInfo = result.cert_info;
-                    row.innerHTML = `
-                        <td>${result.url}</td>
-                        <td>${result.status}</td>
-                        <td>${result.normalized_url || ''}</td>
-                        <td>${certInfo.issuer || ''}</td>
-                        <td>${certInfo.expiry_date || ''}</td>
-                        <td>${certInfo.days_until_expiry || ''}</td>
-                    `;
+            // Sort results by days until expiry (ascending)
+            const validResults = results
+                .filter(r => r.status !== 'invalid' && !r.error)
+                .sort((a, b) => {
+                    const daysA = a.cert_info.days_until_expiry || 0;
+                    const daysB = b.cert_info.days_until_expiry || 0;
+                    return daysA - daysB;
+                });
+            
+            const failedResults = results.filter(r => r.status === 'invalid' || r.error);
+            
+            // Add valid/expiring/expired certs
+            validResults.forEach(result => {
+                const row = certsTable.insertRow();
+                const certInfo = result.cert_info;
+                
+                // Add status-based styling
+                let statusClass = '';
+                switch(result.status) {
+                    case 'expired':
+                        statusClass = 'table-danger';
+                        break;
+                    case 'expiring_soon':
+                        statusClass = 'table-warning';
+                        break;
+                    case 'valid':
+                        statusClass = 'table-success';
+                        break;
+                    default:
+                        statusClass = '';
                 }
+                row.className = statusClass;
+                
+                row.innerHTML = `
+                    <td>${result.url}</td>
+                    <td>${result.status}</td>
+                    <td>${result.normalized_url || ''}</td>
+                    <td>${certInfo.issuer || ''}</td>
+                    <td>${certInfo.expiry_date || ''}</td>
+                    <td>${certInfo.days_until_expiry || ''}</td>
+                `;
+            });
+            
+            // Add failures
+            failedResults.forEach(result => {
+                const row = failuresTable.insertRow();
+                row.className = 'table-danger';
+                row.innerHTML = `
+                    <td>${result.url}</td>
+                    <td>${result.status}</td>
+                    <td>${result.error || 'Unknown error'}</td>
+                `;
             });
             
             // Update summary stats
@@ -658,40 +688,6 @@
         document.getElementById('manualForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            // Reset stats and UI
-            globalStats = {
-                valid: 0,
-                expiringSoon: 0,
-                expired: 0,
-                invalid: 0,
-                failed: 0
-            };
-            
-            initializeTables();
-            document.getElementById('summary-section').style.display = 'flex';
-            
-            const formData = new FormData();
-            const fileInput = document.getElementById('urlFileInput');
-            const textInput = document.getElementById('inputData');
-            
-            // Check if we have a file or text input
-            if (fileInput.files.length > 0) {
-                formData.append('file', fileInput.files[0]);
-            } else if (textInput.value.trim()) {
-                // Create a blob from text input
-                const blob = new Blob([textInput.value], { type: 'text/plain' });
-                formData.append('file', blob, 'urls.txt');
-            } else {
-                alert('Please either enter URLs or upload a file');
-                return;
-            }
-            
-            // Show processing message
-            const progressSection = document.getElementById('progressSection');
-            progressSection.style.display = 'block';
-            const statusText = document.getElementById('statusText');
-            statusText.textContent = 'Processing URLs...';
-            
             try {
                 const response = await fetch('/check_certificates', {
                     method: 'POST',
@@ -700,34 +696,43 @@
                 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
+                let buffer = '';
                 
                 while (true) {
                     const {value, done} = await reader.read();
                     if (done) break;
                     
-                    const lines = decoder.decode(value).split('\n');
+                    buffer += decoder.decode(value, {stream: true});
+                    
+                    // Process complete messages
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep the incomplete line in buffer
+                    
                     for (const line of lines) {
                         if (!line.trim() || !line.startsWith('data: ')) continue;
                         
-                        console.log("Received SSE update:", line);  // Debug log
-                        
-                        const data = JSON.parse(line.substring(6));
-                        if (data.error) {
-                            console.error("Error:", data.error);  // Debug log
-                            showError(data.error);
-                            return;
-                        }
-                        
-                        console.log("Processing update:", data);  // Debug log
-                        updateProgress(data);
-                        if (data.results) {
-                            console.log("Updating results with:", data.results);  // Debug log
-                            updateResults(data.results);
+                        try {
+                            const data = JSON.parse(line.substring(6));
+                            console.log("Received data:", data);  // Debug log
+                            
+                            if (data.error) {
+                                console.error("Error:", data.error);
+                                showError(data.error);
+                                return;
+                            }
+                            
+                            updateProgress(data);
+                            if (data.results) {
+                                updateResults(data.results);
+                            }
+                        } catch (e) {
+                            console.error("JSON parse error:", e, "on line:", line);
+                            continue;
                         }
                     }
                 }
             } catch (error) {
-                console.error("Fetch error:", error);  // Debug log
+                console.error("Fetch error:", error);
                 showError('Error processing URLs: ' + error);
             }
         });
