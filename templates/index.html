@@ -688,6 +688,22 @@
         document.getElementById('manualForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
+            // Initialize formData here
+            const formData = new FormData();
+            
+            // Get the textarea value
+            const inputData = document.getElementById('inputData').value.trim();
+            if (inputData) {
+                const blob = new Blob([inputData], { type: 'text/plain' });
+                formData.append('file', blob, 'domains.txt');
+            }
+            
+            // Check if a file is selected
+            const fileInput = document.getElementById('urlFileInput');
+            if (fileInput.files.length > 0) {
+                formData.append('file', fileInput.files[0]);
+            }
+            
             try {
                 const response = await fetch('/check_certificates', {
                     method: 'POST',
