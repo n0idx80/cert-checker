@@ -29,6 +29,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # Store results globally (you might want to use a proper database in production)
 current_results = []
+stored_results = []
 
 # Initialize scheduler with SQLite job store
 jobstores = {
@@ -308,31 +309,51 @@ def run_scheduled_scan(name):
 def shutdown():
     scheduler.shutdown()
 
+@app.route('/store_results', methods=['POST'])
+def store_results():
+    global stored_results
+    try:
+        data = request.json.get('results', [])
+        stored_results = data
+        return jsonify({'success': True, 'count': len(data)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/export_excel', methods=['POST'])
 def export_excel():
     try:
-        data = request.json['data']
-        filename = request.json['filename']
+        # Get data directly from the request
+        data = request.json.get('data', [])
         
-        # Create Excel file in memory
+        # Debug logging
+        app.logger.info(f"Received export request with {len(data)} items")
+        
+        if not data:
+            app.logger.error("No data received for export")
+            return jsonify({'error': 'No data to export'}), 400
+        
+        # Create Excel file
         output = BytesIO()
         
-        # Create DataFrame and write to Excel
+        # Create DataFrame
         df = pd.DataFrame(data)
-        df.to_excel(output, index=False)
+        app.logger.info(f"Created DataFrame with columns: {df.columns.tolist()}")
         
-        # Seek to beginning of file
+        # Write to Excel
+        df.to_excel(output, index=False)
         output.seek(0)
+        
+        app.logger.info("Excel file created successfully")
         
         return send_file(
             output,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             as_attachment=True,
-            download_name=filename
+            download_name='certificate_results.xlsx'
         )
     
     except Exception as e:
-        print(f"Error in export_excel: {str(e)}")  # Add debugging
+        app.logger.error(f"Error in export_excel: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/scan_progress/<scan_id>')
@@ -867,6 +888,19 @@ def check_domain():
     except Exception as e:
         app.logger.error(f"Error checking domain {domain}: {str(e)}")
         return jsonify({'error': f'Error checking domain: {str(e)}'}), 500
+
+@app.route('/debug_export', methods=['POST'])
+def debug_export():
+    """Debug route to check what data is being received"""
+    try:
+        data = request.json
+        return jsonify({
+            'received_data': data,
+            'data_length': len(data.get('data', [])),
+            'data_keys': [list(item.keys()) for item in data.get('data', [])[:3]]  # First 3 items' keys
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 if __name__ == '__main__':
     app.run(debug=True) 

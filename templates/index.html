@@ -7,6 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         .status-bar {
             padding: 10px;
@@ -863,12 +864,48 @@
                     
                     // Process CTL certificates
                     const ctlTable = document.querySelector('#ctlResultsTable tbody');
-                    if (!ctlTable) {
-                        console.log('No CTL results table found');
-                        throw new Error('CTL results table not found');
+                    console.log('CTL table found:', ctlTable);
+                    if (ctlTable) {
+                        console.log('CTL table rows:', ctlTable.rows.length);
                     }
                     
-                    const ctlData = Array.from(ctlTable.querySelectorAll('tr')).map(row => {
+                    if (!ctlTable || ctlTable.rows.length === 0) {
+                        console.log('No CTL results table found or table is empty');
+                        
+                        // Try the regular results table as fallback
+                        const certsTable = document.querySelector('#certsTable tbody');
+                        console.log('Regular certs table found:', certsTable);
+                        if (certsTable) {
+                            console.log('Regular certs table rows:', certsTable.rows.length);
+                            
+                            if (certsTable.rows.length > 0) {
+                                const certsData = Array.from(certsTable.rows).map(row => {
+                                    return {
+                                        'Domain': row.cells[0]?.textContent || '',
+                                        'Status': row.cells[1]?.textContent || '',
+                                        'Common Name': row.cells[2]?.textContent || '',
+                                        'Alternative Names': row.cells[3]?.textContent || '',
+                                        'Issuer': row.cells[4]?.textContent || '',
+                                        'Expiration Date': row.cells[5]?.textContent || '',
+                                        'Days Remaining': row.cells[6]?.textContent || ''
+                                    };
+                                });
+                                
+                                const wsFound = XLSX.utils.json_to_sheet(certsData);
+                                XLSX.utils.book_append_sheet(wb, wsFound, "Certificate Results");
+                                
+                                console.log('Writing file...');
+                                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                                XLSX.writeFile(wb, `certificate_scan_${timestamp}.xlsx`);
+                                return;
+                            }
+                        }
+                        
+                        alert('No data to export');
+                        return;
+                    }
+                    
+                    const ctlData = Array.from(ctlTable.rows).map(row => {
                         return {
                             'Domain': row.cells[0]?.textContent || '',
                             'Common Name': row.cells[1]?.textContent || '',
@@ -892,7 +929,7 @@
                     
                 } catch (error) {
                     console.error('Error exporting to Excel:', error);
-                    alert('Error exporting to Excel. Please check the console for details.');
+                    alert('Error exporting to Excel: ' + error.message);
                 }
             },
 
