@@ -59,6 +59,21 @@
             max-width: 400px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
     </style>
     <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
 </head>
@@ -179,10 +194,22 @@
                                             <th style="width: 30%">Alternative Names</th>
                                             <th style="width: 15%">Issuer</th>
                                             <th style="width: 8%">Expiry</th>
-                                            <th style="width: 7%">Days</th>
+                                            <th style="width: 7%">Days Til Exp</th>
                                         </tr>
                                     </thead>
-                                    <tbody></tbody>
+                                    <tbody>
+                                        {% for cert in certificates %}
+                                        <tr>
+                                            <td>{{ cert.target }}</td>
+                                            <td>{{ cert.status }}</td>
+                                            <td>{{ cert.common_name }}</td>
+                                            <td>{{ cert.alternative_names }}</td>
+                                            <td>{{ cert.issuer }}</td>
+                                            <td>{{ cert.expiry }}</td>
+                                            <td>{{ cert.days }}</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
                                 </table>
                             </div>
                             
@@ -607,6 +634,7 @@
                     <td>${result.url}</td>
                     <td>${result.status}</td>
                     <td>${result.normalized_url || ''}</td>
+                    <td>${certInfo.alternative_names || ''}</td>
                     <td>${certInfo.issuer || ''}</td>
                     <td>${certInfo.expiry_date || ''}</td>
                     <td>${certInfo.days_until_expiry || ''}</td>
@@ -887,7 +915,7 @@
                                         'Alternative Names': row.cells[3]?.textContent || '',
                                         'Issuer': row.cells[4]?.textContent || '',
                                         'Expiration Date': row.cells[5]?.textContent || '',
-                                        'Days Remaining': row.cells[6]?.textContent || ''
+                                        'Days Til Exp': row.cells[6]?.textContent || ''
                                     };
                                 });
                                 
@@ -1132,7 +1160,7 @@
                     <td>${result.Status || ''}</td>
                     <td>${result.Issuer || ''}</td>
                     <td>${result['Expiration Date'] || ''}</td>
-                    <td>${result['Days Until Expiry'] || ''}</td>
+                    <td>${result['Days Til Exp'] || ''}</td>
                 `;
                 tbody.appendChild(row);
                 

@@ -74,7 +74,20 @@ async def validate_domains_async(domains):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    certificates = [
+        {
+            "target": "trust.com",
+            "status": "valid",
+            "common_name": "https://trust.com",
+            "alternative_names": "Entrust, Inc.",
+            "issuer": "Entrust, Inc.",
+            "expiry": "2025-10-13",
+            "days": 203
+        },
+        # Add more certificates as needed
+    ]
+
+    return render_template('index.html', certificates=certificates)
 
 def perform_certificate_scan(domains, name=None, job_id=None):
     """Perform the actual certificate scanning"""
