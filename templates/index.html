@@ -398,6 +398,53 @@
                 </div>
             </div>
         </div>
+
+        <div class="container mt-4">
+            <h2>User Sign-in Correlation</h2>
+            <div class="card">
+                <div class="card-body">
+                    <form method="POST" action="/analyze-signins" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="outlookLogs" class="form-label">Outlook Logs</label>
+                            <input class="form-control" type="file" id="outlookLogs" name="outlookLogs">
+                        </div>
+                        <div class="mb-3">
+                            <label for="azureLogs" class="form-label">Azure AD Logs</label>
+                            <input class="form-control" type="file" id="azureLogs" name="azureLogs">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Analyze Sign-ins</button>
+                    </form>
+                </div>
+            </div>
+            
+            {% if correlation_results %}
+            <div class="mt-4">
+                <h3>Correlation Results</h3>
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Status</th>
+                            <th>Outlook Activities</th>
+                            <th>Azure Sign-ins</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for email, data in correlation_results.items() %}
+                        <tr>
+                            <td>{{ email }}</td>
+                            <td>{{ data.correlation_status }}</td>
+                            <td>{{ data.outlook_activity|length }}</td>
+                            <td>{{ data.azure_signins|length }}</td>
+                            <td><button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#details-{{ loop.index }}">View</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
     </div>
 
     <!-- Schedule Modal -->

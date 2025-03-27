@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_file, Response, flash, redirect
 import pandas as pd
 import asyncio
 import aiohttp
@@ -914,6 +914,41 @@ def debug_export():
         })
     except Exception as e:
         return jsonify({'error': str(e)})
+
+@app.route('/analyze-signins', methods=['POST'])
+def analyze_signins():
+    if 'outlookLogs' not in request.files or 'azureLogs' not in request.files:
+        flash('Both log files are required')
+        return redirect(request.url)
+    
+    outlook_file = request.files['outlookLogs']
+    azure_file = request.files['azureLogs']
+    
+    if outlook_file.filename == '' or azure_file.filename == '':
+        flash('Both log files are required')
+        return redirect(request.url)
+    
+    # Save the uploaded files temporarily
+    outlook_path = os.path.join(app.config['UPLOAD_FOLDER'], 'outlook_logs.json')
+    azure_path = os.path.join(app.config['UPLOAD_FOLDER'], 'azure_logs.json')
+    
+    outlook_file.save(outlook_path)
+    azure_file.save(azure_path)
+    
+    # Import the log analyzer functions
+    sys.path.append('../outlook_log_analyzer')
+    from log_analyzer import analyze_outlook_logs, analyze_azure_ad_logs, correlate_outlook_azure_logs
+    
+    # Analyze the logs
+    outlook_logs = analyze_outlook_logs(outlook_path)
+    azure_logs = analyze_azure_ad_logs(azure_path)
+    correlation_results = correlate_outlook_azure_logs(outlook_logs, azure_logs)
+    
+    # Clean up temporary files
+    os.remove(outlook_path)
+    os.remove(azure_path)
+    
+    return render_template('index.html', correlation_results=correlation_results)
 
 if __name__ == '__main__':
     app.run(debug=True) 
