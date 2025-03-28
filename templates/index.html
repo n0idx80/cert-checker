@@ -74,6 +74,33 @@
         tr:hover {
             background-color: #f5f5f5;
         }
+        
+        /* Adjust column widths for the CTL results table */
+        #ctlResultsTable th:nth-child(1), #ctlResultsTable td:nth-child(1) { width: 14%; } /* Domain */
+        #ctlResultsTable th:nth-child(2), #ctlResultsTable td:nth-child(2) { width: 18%; } /* Common Name */
+        #ctlResultsTable th:nth-child(3), #ctlResultsTable td:nth-child(3) { width: 8%; }  /* Status */
+        #ctlResultsTable th:nth-child(4), #ctlResultsTable td:nth-child(4) { width: 18%; } /* Issuer */
+        #ctlResultsTable th:nth-child(5), #ctlResultsTable td:nth-child(5) { width: 12%; } /* Expiration Date */
+        #ctlResultsTable th:nth-child(6), #ctlResultsTable td:nth-child(6) { width: 10%; } /* Time Until Expiry */
+        #ctlResultsTable th:nth-child(7), #ctlResultsTable td:nth-child(7) { width: 20%; } /* Registrar - increased width */
+        
+        /* Add text truncation with ellipsis */
+        #ctlResultsTable td {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 0;
+        }
+        
+        /* Add tooltip effect on hover */
+        #ctlResultsTable td:hover {
+            overflow: visible;
+            white-space: normal;
+            word-break: break-word;
+            background-color: #f8f9fa;
+            position: relative;
+            z-index: 1;
+        }
     </style>
     <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
 </head>

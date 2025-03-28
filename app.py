@@ -772,10 +772,16 @@ def query_ctl():
         text_data = request.form.get('targets', '')
         domains = [d.strip() for d in text_data.splitlines() if d.strip()]
 
-    # Create a session with retries for reliability
+    # Create a session with more robust retries for reliability
     def create_session():
         session = requests.Session()
-        retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        # Increase retries and add longer backoff for 503 errors
+        retries = Retry(
+            total=5,  # Increase total retries
+            backoff_factor=1.0,  # Increase backoff factor
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
         session.mount('https://', HTTPAdapter(max_retries=retries))
         return session
 
@@ -807,21 +813,75 @@ def query_ctl():
                 try:
                     print(f"Processing domain: {domain}", flush=True)
                     session = create_session()
+                    
+                    # Add a delay between requests to avoid overwhelming crt.sh
+                    time.sleep(1.5)  # 1.5 second delay between requests
+                    
                     url = f"https://crt.sh/?q={domain}&output=json"
-                    response = session.get(url, timeout=30)
-                    response.raise_for_status()
                     
-                    # Check if response is valid JSON
                     try:
-                        certs = response.json()
-                    except json.JSONDecodeError:
-                        print(f"Invalid JSON response for {domain}", flush=True)
-                        certs = []
+                        response = session.get(url, timeout=45)  # Increase timeout
+                        response.raise_for_status()
+                        
+                        # Check if response is valid JSON
+                        try:
+                            certs = response.json()
+                        except json.JSONDecodeError:
+                            print(f"Invalid JSON response for {domain}", flush=True)
+                            certs = []
+                            
+                    except requests.exceptions.HTTPError as http_err:
+                        if response.status_code == 503:
+                            # Special handling for 503 errors
+                            error_msg = f"crt.sh service temporarily unavailable (503) for {domain}. Try again later."
+                            print(error_msg, flush=True)
+                            
+                            # Add a dummy result to show the error
+                            all_results.append({
+                                'Domain': domain,
+                                'Common Name': 'Error',
+                                'Status': 'Error',
+                                'Issuer': 'N/A',
+                                'Expiration Date': 'N/A',
+                                'Days Until Expiry': 'N/A',
+                                'Registrar': 'N/A'
+                            })
+                            
+                            processed += 1
+                            progress = (processed / total) * 100
+                            
+                            update = {
+                                'progress': progress,
+                                'current_domain': domain,
+                                'processed': processed,
+                                'total': total,
+                                'results': all_results,
+                                'summary': {
+                                    'total': total,
+                                    'processed': processed,
+                                    'valid': valid_count,
+                                    'expiring_soon': expiring_soon_count,
+                                    'expired': expired_count
+                                },
+                                'complete': (processed == total),
+                                'error': error_msg
+                            }
+                            
+                            yield f"data: {json.dumps(update)}\n\n"
+                            continue
+                        else:
+                            # Re-raise other HTTP errors
+                            raise
                     
+                    # Process certificates if we got a valid response
                     domain_results = []
                     
                     # Get registrar info
-                    registrar = get_registrar_info(domain)
+                    try:
+                        registrar = get_registrar_info(domain)
+                    except Exception as e:
+                        print(f"Error getting registrar for {domain}: {str(e)}", flush=True)
+                        registrar = "Unknown"
                     
                     for cert in certs:
                         try:
