@@ -22,6 +22,8 @@ import os
 import subprocess
 import tempfile
 from werkzeug.utils import secure_filename
+import whois
+import tldextract
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
@@ -770,11 +772,36 @@ def query_ctl():
         text_data = request.form.get('targets', '')
         domains = [d.strip() for d in text_data.splitlines() if d.strip()]
 
+    # Create a session with retries for reliability
+    def create_session():
+        session = requests.Session()
+        retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        session.mount('https://', HTTPAdapter(max_retries=retries))
+        return session
+
     def generate():
         try:
             total = len(domains)
             processed = 0
             all_results = []
+            valid_count = 0
+            expiring_soon_count = 0
+            expired_count = 0
+            
+            # Function to get registrar info
+            def get_registrar_info(domain):
+                try:
+                    # Extract the registered domain
+                    extracted = tldextract.extract(domain)
+                    registered_domain = f"{extracted.domain}.{extracted.suffix}"
+                    
+                    # Get WHOIS information
+                    w = whois.whois(registered_domain)
+                    registrar = w.registrar if hasattr(w, 'registrar') else 'Unknown'
+                    return registrar
+                except Exception as e:
+                    print(f"Error getting registrar for {domain}: {str(e)}", flush=True)
+                    return "Unknown"
             
             for domain in domains:
                 try:
@@ -784,8 +811,17 @@ def query_ctl():
                     response = session.get(url, timeout=30)
                     response.raise_for_status()
                     
-                    certs = response.json()
+                    # Check if response is valid JSON
+                    try:
+                        certs = response.json()
+                    except json.JSONDecodeError:
+                        print(f"Invalid JSON response for {domain}", flush=True)
+                        certs = []
+                    
                     domain_results = []
+                    
+                    # Get registrar info
+                    registrar = get_registrar_info(domain)
                     
                     for cert in certs:
                         try:
@@ -797,16 +833,19 @@ def query_ctl():
                             if now > not_after:
                                 status = 'Expired'
                                 priority = 1
+                                expired_count += 1
                             elif now < not_before:
                                 status = 'Not Yet Valid'
                                 priority = 4
                             else:
-                                if days_until_expiry <= 30:
+                                if days_until_expiry <= 90:
                                     status = 'Expiring Soon'
                                     priority = 2
+                                    expiring_soon_count += 1
                                 else:
                                     status = 'Valid'
                                     priority = 3
+                                    valid_count += 1
                             
                             result = {
                                 'Domain': domain,
@@ -815,7 +854,9 @@ def query_ctl():
                                 'Issuer': cert.get('issuer_name', 'Unknown'),
                                 'Expiration Date': not_after.strftime('%Y-%m-%d'),
                                 'Days Until Expiry': str(days_until_expiry),
-                                'priority': priority
+                                'Registrar': registrar,
+                                'priority': priority,
+                                'expiry_timestamp': not_after.timestamp()  # For sorting
                             }
                             domain_results.append(result)
                             
@@ -823,30 +864,75 @@ def query_ctl():
                             print(f"Error processing certificate: {str(e)}", flush=True)
                             continue
                     
-                    # Sort domain results by priority
-                    domain_results.sort(key=lambda x: (x['priority'], x.get('Days Until Expiry', 0)))
-                    # Remove priority field before adding to results
+                    # Sort domain results by priority and then by expiry date
+                    domain_results.sort(key=lambda x: (
+                        x['priority'], 
+                        -x['expiry_timestamp'] if x['priority'] == 1 else x['expiry_timestamp']
+                    ))
+                    
+                    # Remove sorting fields before adding to results
                     for result in domain_results:
                         del result['priority']
+                        del result['expiry_timestamp']
+                    
                     all_results.extend(domain_results)
                     
                     processed += 1
                     progress = (processed / total) * 100
                     
+                    # Create summary stats
+                    summary = {
+                        'total': total,
+                        'processed': processed,
+                        'valid': valid_count,
+                        'expiring_soon': expiring_soon_count,
+                        'expired': expired_count
+                    }
+                    
+                    # Send update after each domain is processed
                     update = {
                         'progress': progress,
                         'current_domain': domain,
                         'processed': processed,
                         'total': total,
                         'results': all_results,
+                        'summary': summary,
                         'complete': (processed == total)
                     }
                     
+                    # Convert to JSON and send as SSE
                     yield f"data: {json.dumps(update)}\n\n"
                     
                 except Exception as e:
                     print(f"Error processing domain {domain}: {str(e)}", flush=True)
+                    # Send error update
+                    error_update = {
+                        'error': f"Error processing {domain}: {str(e)}",
+                        'progress': (processed / total) * 100,
+                        'current_domain': domain,
+                        'processed': processed,
+                        'total': total
+                    }
+                    yield f"data: {json.dumps(error_update)}\n\n"
                     continue
+            
+            # Send final update
+            final_update = {
+                'progress': 100,
+                'current_domain': 'Complete',
+                'processed': total,
+                'total': total,
+                'results': all_results,
+                'summary': {
+                    'total': total,
+                    'processed': total,
+                    'valid': valid_count,
+                    'expiring_soon': expiring_soon_count,
+                    'expired': expired_count
+                },
+                'complete': True
+            }
+            yield f"data: {json.dumps(final_update)}\n\n"
             
         except Exception as e:
             print(f"Fatal error in CT log query: {str(e)}", flush=True)
@@ -855,11 +941,12 @@ def query_ctl():
                 'progress': 0,
                 'current_domain': None,
                 'processed': 0,
-                'total': 0,
+                'total': total if 'total' in locals() else 0,
                 'complete': True
             }
             yield f"data: {json.dumps(error_update)}\n\n"
 
+    # Set the appropriate headers for SSE
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/check', methods=['POST'])
@@ -915,40 +1002,13 @@ def debug_export():
     except Exception as e:
         return jsonify({'error': str(e)})
 
-@app.route('/analyze-signins', methods=['POST'])
-def analyze_signins():
-    if 'outlookLogs' not in request.files or 'azureLogs' not in request.files:
-        flash('Both log files are required')
-        return redirect(request.url)
-    
-    outlook_file = request.files['outlookLogs']
-    azure_file = request.files['azureLogs']
-    
-    if outlook_file.filename == '' or azure_file.filename == '':
-        flash('Both log files are required')
-        return redirect(request.url)
-    
-    # Save the uploaded files temporarily
-    outlook_path = os.path.join(app.config['UPLOAD_FOLDER'], 'outlook_logs.json')
-    azure_path = os.path.join(app.config['UPLOAD_FOLDER'], 'azure_logs.json')
-    
-    outlook_file.save(outlook_path)
-    azure_file.save(azure_path)
-    
-    # Import the log analyzer functions
-    sys.path.append('../outlook_log_analyzer')
-    from log_analyzer import analyze_outlook_logs, analyze_azure_ad_logs, correlate_outlook_azure_logs
-    
-    # Analyze the logs
-    outlook_logs = analyze_outlook_logs(outlook_path)
-    azure_logs = analyze_azure_ad_logs(azure_path)
-    correlation_results = correlate_outlook_azure_logs(outlook_logs, azure_logs)
-    
-    # Clean up temporary files
-    os.remove(outlook_path)
-    os.remove(azure_path)
-    
-    return render_template('index.html', correlation_results=correlation_results)
+@app.route('/debug_ctl', methods=['GET'])
+def debug_ctl():
+    domain = 'google.com'
+    session = requests.Session()
+    url = f"https://crt.sh/?q={domain}&output=json"
+    response = session.get(url, timeout=30)
+    return jsonify(response.json())
 
 if __name__ == '__main__':
     app.run(debug=True) 

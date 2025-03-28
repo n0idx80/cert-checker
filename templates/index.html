@@ -241,13 +241,13 @@
                                             <h5 class="card-title mb-0">Manual Input</h5>
                                         </div>
                                         <div class="card-body">
-                                            <form id="ctlManualForm">
+                                            <form id="ctlManualForm" class="mt-4" action="javascript:void(0);">
                                                 <div class="mb-3">
-                                                    <label for="manualDomains" class="form-label">Enter Domains</label>
-                                                    <textarea class="form-control" id="manualDomains" rows="10" 
-                                                        placeholder="Enter domains (one per line)"></textarea>
+                                                    <label for="manualDomains" class="form-label">Enter domains (one per line)</label>
+                                                    <textarea class="form-control" id="manualDomains" name="targets" rows="5" 
+                                                              placeholder="Enter one domain per line"></textarea>
                                                 </div>
-                                                <button type="submit" class="btn btn-primary">Query CT Logs</button>
+                                                <button type="submit" class="btn btn-primary">Check Certificate Transparency Logs</button>
                                             </form>
                                         </div>
                                     </div>
@@ -260,13 +260,12 @@
                                             <h5 class="card-title mb-0">File Upload</h5>
                                         </div>
                                         <div class="card-body">
-                                            <form id="ctlFileForm">
+                                            <form id="ctlFileForm" class="mt-4" action="javascript:void(0);">
                                                 <div class="mb-3">
-                                                    <label for="domainFile" class="form-label">Upload Domains List</label>
-                                                    <input type="file" class="form-control" id="domainFile" accept=".txt">
-                                                    <small class="text-muted">Upload a .txt file with one domain per line</small>
+                                                    <label for="domainFile" class="form-label">Or upload a file (one domain per line)</label>
+                                                    <input type="file" class="form-control" id="domainFile" name="file" accept=".txt,.csv,.list">
                                                 </div>
-                                                <button type="submit" class="btn btn-primary">Query CT Logs</button>
+                                                <button type="submit" class="btn btn-primary">Check Certificate Transparency Logs</button>
                                             </form>
                                         </div>
                                     </div>
@@ -290,22 +289,27 @@
                                     <div id="ctlResultsSection" style="display: none;" class="mt-4">
                                         <h4>Certificate Transparency Log Results</h4>
                                         <div class="row mt-4">
-                                            <div class="col-md-8">
-                                                <table id="ctlResultsTable" class="table table-striped">
-                                                    <thead>
-                                                        <tr>
-                                                            <th>Domain</th>
-                                                            <th>Common Name</th>
-                                                            <th>Status</th>
-                                                            <th>Issuer</th>
-                                                            <th>Expiration Date</th>
-                                                            <th>Time Until Expiry</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody></tbody>
-                                                </table>
+                                            <div class="col-12">
+                                                <div class="table-responsive">
+                                                    <table id="ctlResultsTable" class="table table-striped">
+                                                        <thead>
+                                                            <tr>
+                                                                <th>Domain</th>
+                                                                <th>Common Name</th>
+                                                                <th>Status</th>
+                                                                <th>Issuer</th>
+                                                                <th>Expiration Date</th>
+                                                                <th>Time Until Expiry</th>
+                                                                <th>Registrar</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody></tbody>
+                                                    </table>
+                                                </div>
                                             </div>
-                                            <div class="col-md-4">
+                                        </div>
+                                        <div class="row mt-4">
+                                            <div class="col-md-4 mx-auto">
                                                 <canvas id="ctlPieChart"></canvas>
                                             </div>
                                         </div>
@@ -397,53 +401,6 @@
                     <p><strong>Not Yet Valid:</strong> <span id="not-yet-valid">0</span></p>
                 </div>
             </div>
-        </div>
-
-        <div class="container mt-4">
-            <h2>User Sign-in Correlation</h2>
-            <div class="card">
-                <div class="card-body">
-                    <form method="POST" action="/analyze-signins" enctype="multipart/form-data">
-                        <div class="mb-3">
-                            <label for="outlookLogs" class="form-label">Outlook Logs</label>
-                            <input class="form-control" type="file" id="outlookLogs" name="outlookLogs">
-                        </div>
-                        <div class="mb-3">
-                            <label for="azureLogs" class="form-label">Azure AD Logs</label>
-                            <input class="form-control" type="file" id="azureLogs" name="azureLogs">
-                        </div>
-                        <button type="submit" class="btn btn-primary">Analyze Sign-ins</button>
-                    </form>
-                </div>
-            </div>
-            
-            {% if correlation_results %}
-            <div class="mt-4">
-                <h3>Correlation Results</h3>
-                <table class="table table-striped">
-                    <thead>
-                        <tr>
-                            <th>User</th>
-                            <th>Status</th>
-                            <th>Outlook Activities</th>
-                            <th>Azure Sign-ins</th>
-                            <th>Details</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for email, data in correlation_results.items() %}
-                        <tr>
-                            <td>{{ email }}</td>
-                            <td>{{ data.correlation_status }}</td>
-                            <td>{{ data.outlook_activity|length }}</td>
-                            <td>{{ data.azure_signins|length }}</td>
-                            <td><button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#details-{{ loop.index }}">View</button></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
         </div>
     </div>
 
@@ -1092,94 +1049,136 @@
         document.getElementById('exportTextBtn').addEventListener('click', exportHandlers.text);
         document.getElementById('exportDashboardBtn').addEventListener('click', exportHandlers.dashboard);
 
-        // Function to handle CT log queries (used by both forms)
-        async function handleCTLQuery(formData) {
-            const statusText = document.getElementById('ctlStatus') || document.createElement('div');
-            if (!document.getElementById('ctlStatus')) {
-                statusText.id = 'ctlStatus';
-                document.getElementById('ctlResultsSection').prepend(statusText);
-            }
+        // Update the event source handler for CT log queries
+        function handleCTLQuery(formData) {
+            // Show progress section
+            const progressSection = document.getElementById('ctlProgressSection');
+            progressSection.style.display = 'block';
             
+            const progressBar = document.getElementById('ctlProgressBar');
+            const statusText = document.getElementById('ctlStatusText');
             statusText.textContent = 'Starting CT Log query...';
             
-            try {
-                const response = await fetch('/query_ctl', {
-                    method: 'POST',
-                    body: formData
-                });
-
+            // Clear previous results
+            const resultsTable = document.querySelector('#ctlResultsTable tbody');
+            resultsTable.innerHTML = '';
+            
+            // Create and connect to event source
+            const eventSource = new EventSource('/query_ctl?' + new URLSearchParams({
+                timestamp: new Date().getTime()  // Prevent caching
+            }));
+            
+            fetch('/query_ctl', {
+                method: 'POST',
+                body: formData
+            }).then(response => {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-
-                while (true) {
-                    const {value, done} = await reader.read();
-                    if (done) break;
-                    
-                    const lines = decoder.decode(value).split('\n');
-                    for (const line of lines) {
-                        if (!line.trim() || !line.startsWith('data: ')) continue;
-                        
-                        try {
-                            const jsonStr = line.substring(6);
-                            const data = JSON.parse(jsonStr);
-                            
-                            if (data.error) {
-                                statusText.textContent = `Error: ${data.error}`;
-                                return;
-                            }
-
-                            statusText.textContent = `Processing domain ${data.current_domain} (${Math.round(data.progress)}%)`;
-                            
-                            if (data.results && data.results.length > 0) {
-                                updateCTLResults(data.results);
-                            }
-
-                            if (data.complete) {
-                                statusText.textContent = 'CT Log query complete!';
-                            }
-                        } catch (e) {
-                            // Only log parsing errors in console if needed
-                            console.debug('Parse error:', e);
+                
+                function processStream() {
+                    return reader.read().then(({value, done}) => {
+                        if (done) {
+                            console.log('Stream complete');
+                            return;
                         }
-                    }
+                        
+                        const text = decoder.decode(value);
+                        const lines = text.split('\n');
+                        
+                        for (const line of lines) {
+                            if (!line.trim() || !line.startsWith('data: ')) continue;
+                            
+                            try {
+                                const jsonStr = line.substring(6);
+                                const data = JSON.parse(jsonStr);
+                                
+                                console.log('Received data:', data);  // Debug log
+                                
+                                if (data.error) {
+                                    statusText.textContent = `Error: ${data.error}`;
+                                    return;
+                                }
+                                
+                                // Update progress
+                                const progress = Math.round(data.progress);
+                                progressBar.style.width = `${progress}%`;
+                                progressBar.textContent = `${progress}%`;
+                                progressBar.setAttribute('aria-valuenow', progress);
+                                
+                                statusText.textContent = `Processing domain ${data.current_domain} (${progress}%)`;
+                                
+                                // Update results if available
+                                if (data.results && data.results.length > 0) {
+                                    document.getElementById('ctlResultsSection').style.display = 'block';
+                                    updateCTLResults(data.results);
+                                }
+                                
+                                // Update summary if available
+                                if (data.summary) {
+                                    updateCTLSummary(data.summary);
+                                }
+                                
+                                // Handle completion
+                                if (data.complete) {
+                                    statusText.textContent = 'CT Log query complete!';
+                                    progressBar.classList.remove('progress-bar-animated');
+                                }
+                            } catch (e) {
+                                console.error('Parse error:', e, line);
+                            }
+                        }
+                        
+                        return processStream();
+                    });
                 }
-            } catch (e) {
-                console.debug('Network or processing error:', e);
-                statusText.textContent = 'Query completed with some errors';
-            }
+                
+                return processStream();
+            }).catch(error => {
+                console.error('Fetch error:', error);
+                statusText.textContent = `Error: ${error.message}`;
+            });
         }
 
-        // File upload form handler
-        document.getElementById('ctlFileForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const fileInput = document.getElementById('domainFile');
-            if (!fileInput.files.length) {
-                alert('Please select a file to upload');
-                return;
+        // Add this new function to update the summary
+        function updateCTLSummary(summary) {
+            // Create or update the summary section if it doesn't exist
+            let summarySection = document.getElementById('ctlSummarySection');
+            if (!summarySection) {
+                summarySection = document.createElement('div');
+                summarySection.id = 'ctlSummarySection';
+                summarySection.className = 'row mt-4';
+                
+                summarySection.innerHTML = `
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Certificate Summary</h5>
+                            </div>
+                            <div class="card-body">
+                                <p><strong>Total Domains:</strong> <span id="ctlTotalDomains">0</span></p>
+                                <p><strong>Processed:</strong> <span id="ctlProcessedDomains">0</span></p>
+                                <p><strong>Valid:</strong> <span id="ctlValidCerts" class="text-success">0</span></p>
+                                <p><strong>Expiring Soon:</strong> <span id="ctlExpiringSoonCerts" class="text-warning">0</span></p>
+                                <p><strong>Expired:</strong> <span id="ctlExpiredCerts" class="text-danger">0</span></p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                // Insert before the results table
+                const resultsSection = document.getElementById('ctlResultsSection');
+                resultsSection.insertBefore(summarySection, resultsSection.firstChild);
             }
-
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            await handleCTLQuery(formData);
-        });
-
-        // Manual input form handler
-        document.getElementById('ctlManualForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
             
-            const domainsText = document.getElementById('manualDomains').value.trim();
-            if (!domainsText) {
-                alert('Please enter at least one domain');
-                return;
-            }
+            // Update the summary values
+            document.getElementById('ctlTotalDomains').textContent = summary.total;
+            document.getElementById('ctlProcessedDomains').textContent = summary.processed;
+            document.getElementById('ctlValidCerts').textContent = summary.valid;
+            document.getElementById('ctlExpiringSoonCerts').textContent = summary.expiring_soon;
+            document.getElementById('ctlExpiredCerts').textContent = summary.expired;
+        }
 
-            const formData = new FormData();
-            const blob = new Blob([domainsText], { type: 'text/plain' });
-            formData.append('file', blob, 'domains.txt');
-            await handleCTLQuery(formData);
-        });
-
+        // Update the function that updates the results table
         function updateCTLResults(results) {
             const resultsSection = document.getElementById('ctlResultsSection');
             resultsSection.style.display = 'block';
@@ -1199,7 +1198,15 @@
                 const row = document.createElement('tr');
                 
                 // Add status-based highlighting
-                row.classList.add(getStatusClass(result.Status));
+                if (result.Status === 'Expired') {
+                    row.classList.add('table-danger');
+                } else if (result.Status === 'Expiring Soon') {
+                    row.classList.add('table-warning');
+                } else if (result.Status === 'Valid') {
+                    row.classList.add('table-success');
+                } else if (result.Status === 'Not Yet Valid') {
+                    row.classList.add('table-info');
+                }
                 
                 row.innerHTML = `
                     <td>${result.Domain || ''}</td>
@@ -1207,7 +1214,8 @@
                     <td>${result.Status || ''}</td>
                     <td>${result.Issuer || ''}</td>
                     <td>${result['Expiration Date'] || ''}</td>
-                    <td>${result['Days Til Exp'] || ''}</td>
+                    <td>${result['Days Until Expiry'] || ''}</td>
+                    <td>${result.Registrar || 'Unknown'}</td>
                 `;
                 tbody.appendChild(row);
                 
@@ -1219,21 +1227,6 @@
             
             // Create/update pie chart
             createCTLPieChart(statusCounts);
-        }
-        
-        function getStatusClass(status) {
-            switch (status) {
-                case 'Expired':
-                    return 'table-danger';
-                case 'Expiring Soon':
-                    return 'table-warning';
-                case 'Not Yet Valid':
-                    return 'table-info';
-                case 'Valid':
-                    return 'table-success';
-                default:
-                    return '';
-            }
         }
         
         function createCTLPieChart(statusCounts) {
@@ -1277,6 +1270,37 @@
             // We'll implement this function later to show certificate details
             console.log(`Viewing details for ${domain}`);
         }
+
+        // Add these event handlers for the CTL forms
+        document.getElementById('ctlManualForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            console.log('CTL Manual form submitted');
+            
+            const domainsText = document.getElementById('manualDomains').value.trim();
+            if (!domainsText) {
+                alert('Please enter at least one domain');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('targets', domainsText);
+            handleCTLQuery(formData);
+        });
+
+        document.getElementById('ctlFileForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            console.log('CTL File form submitted');
+            
+            const fileInput = document.getElementById('domainFile');
+            if (!fileInput.files.length) {
+                alert('Please select a file to upload');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            handleCTLQuery(formData);
+        });
     </script>
 </body>
 </html>
