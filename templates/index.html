@@ -545,6 +545,8 @@
     <script>
         // Add this near the top of your script section
         window.scanComplete = false;
+        window.intentionalClose = false;
+        window.ctlEventSource = null;
 
         // Initialize chart globally
         let certStatusChart = null;
@@ -1087,17 +1089,7 @@
         // Variable to store the current scan ID
         let currentScanId = null;
 
-        // Add a flag to track if we're intentionally closing the connection
-        window.intentionalClose = false;
-
-        // Update the EventSource creation
-        window.ctlEventSource = new EventSource(`/query_ctl?timestamp=${timestamp}`);
-
-        window.ctlEventSource.onopen = function() {
-            console.log('EventSource connection established');
-        };
-
-        // When we want to close the connection
+        // Function to close EventSource properly
         function closeEventSource() {
             if (window.ctlEventSource) {
                 window.intentionalClose = true;
@@ -1105,41 +1097,6 @@
                 window.ctlEventSource = null;
             }
         }
-
-        // In the completion handler
-        if (data.complete) {
-            window.scanComplete = true;
-            statusText.textContent = data.stopped ? 'Scan stopped by user.' : 'CT Log query complete!';
-            progressBar.classList.remove('progress-bar-animated');
-            
-            // Close the EventSource
-            closeEventSource();
-        }
-
-        // In the error handler
-        window.ctlEventSource.onerror = function(error) {
-            console.error('EventSource error:', error);
-            
-            // If we intentionally closed it, don't reconnect
-            if (window.intentionalClose) {
-                console.log('Connection closed intentionally');
-                return;
-            }
-            
-            // Don't immediately show an error message or close the connection
-            // Instead, try to reconnect if we haven't received a complete message
-            if (!window.scanComplete) {
-                console.log('Attempting to reconnect...');
-                
-                // Only update status text if we're not already showing results
-                if (document.querySelector('#ctlResultsTable tbody').children.length === 0) {
-                    statusText.textContent = 'Connection interrupted. Attempting to reconnect...';
-                }
-            } else {
-                // If scan is complete, we can close the connection
-                closeEventSource();
-            }
-        };
 
         // Update the handleCTLQuery function
         function handleCTLQuery(formData) {
@@ -1194,18 +1151,49 @@
                             return;
                         }
                         
+                        // Check if this is a large domain set
+                        if (data.is_large_set) {
+                            // Show a message about the large set
+                            if (data.message) {
+                                const messageDiv = document.getElementById('largeDomainSetMessage') || 
+                                    document.createElement('div');
+                                messageDiv.id = 'largeDomainSetMessage';
+                                messageDiv.className = 'alert alert-info mt-3';
+                                messageDiv.textContent = data.message;
+                                
+                                if (!document.getElementById('largeDomainSetMessage')) {
+                                    progressSection.appendChild(messageDiv);
+                                }
+                            }
+                        }
+                        
                         // Update progress
                         const progress = Math.round(data.progress || 0);
                         progressBar.style.width = `${progress}%`;
                         progressBar.textContent = `${progress}%`;
                         progressBar.setAttribute('aria-valuenow', progress);
                         
-                        statusText.textContent = `Processing domain ${data.current_domain || 'unknown'} (${progress}%)`;
+                        // Update status text with more information
+                        if (data.summary) {
+                            statusText.textContent = `Processing ${data.current_domain || 'unknown'} (${progress}%) - Found ${
+                                data.summary.valid + data.summary.expiring_soon + data.summary.expired
+                            } certificates`;
+                        } else {
+                            statusText.textContent = `Processing ${data.current_domain || 'unknown'} (${progress}%)`;
+                        }
                         
-                        // Update results if available
+                        // Always update results if available, but use efficient DOM updates
                         if (data.results && data.results.length > 0) {
                             document.getElementById('ctlResultsSection').style.display = 'block';
-                            updateCTLResults(data.results);
+                            
+                            // Use a more efficient update strategy for large sets
+                            if (data.is_large_set) {
+                                // For large sets, replace the entire table body at once instead of row-by-row
+                                updateCTLResultsEfficiently(data.results);
+                            } else {
+                                // For smaller sets, use the normal update function
+                                updateCTLResults(data.results);
+                            }
                         }
                         
                         // Update summary if available
@@ -1216,7 +1204,11 @@
                         // Handle completion
                         if (data.complete) {
                             window.scanComplete = true;
-                            statusText.textContent = data.stopped ? 'Scan stopped by user.' : 'CT Log query complete!';
+                            statusText.textContent = data.stopped ? 
+                                'Scan stopped by user.' : 
+                                `CT Log query complete! Processed ${data.processed} domains with ${
+                                    (data.summary ? data.summary.valid + data.summary.expiring_soon + data.summary.expired : 0)
+                                } certificates`;
                             progressBar.classList.remove('progress-bar-animated');
                             
                             // Close the EventSource
@@ -1413,6 +1405,66 @@
             });
         }
 
+        // Add a more efficient update function for large result sets
+        function updateCTLResultsEfficiently(results) {
+            const tbody = document.querySelector('#ctlResultsTable tbody');
+            
+            // Create a document fragment to build the table rows
+            const fragment = document.createDocumentFragment();
+            
+            // Initialize status counts for pie chart
+            const statusCounts = {
+                'Valid': 0,
+                'Expiring Soon': 0,
+                'Expired': 0,
+                'Not Yet Valid': 0,
+                'Error': 0
+            };
+            
+            // Process all results at once
+            results.forEach(result => {
+                const row = document.createElement('tr');
+                
+                // Set row class based on status
+                if (result.Status.startsWith('Expired')) {
+                    row.className = 'table-danger';
+                    statusCounts['Expired']++;
+                } else if (result.Status.startsWith('Expiring Soon')) {
+                    row.className = 'table-warning';
+                    statusCounts['Expiring Soon']++;
+                } else if (result.Status === 'Valid') {
+                    row.className = 'table-success';
+                    statusCounts['Valid']++;
+                } else if (result.Status === 'Not Yet Valid') {
+                    row.className = 'table-info';
+                    statusCounts['Not Yet Valid']++;
+                } else if (result.Status === 'Error') {
+                    row.className = 'table-secondary';
+                    statusCounts['Error']++;
+                }
+                
+                // Build the row content
+                row.innerHTML = `
+                    <td>${result.Domain}</td>
+                    <td>${result['Common Name']}</td>
+                    <td>${result.Status}</td>
+                    <td>${result.Issuer}</td>
+                    <td>${result['Expiration Date']}</td>
+                    <td>${result['Days Until Expiry']}</td>
+                    <td>${result.Registrar}</td>
+                `;
+                
+                fragment.appendChild(row);
+            });
+            
+            // Replace the entire table body content at once
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+            
+            // Update the chart with the new status counts
+            updateCertStatusChart(statusCounts);
+        }
+
         function viewCertDetails(domain) {
             // We'll implement this function later to show certificate details
             console.log(`Viewing details for ${domain}`);
@@ -1444,9 +1496,53 @@
                 return;
             }
             
+            console.log(`Selected file: ${fileInput.files[0].name}, size: ${fileInput.files[0].size} bytes`);
+            
+            // Reset scan complete flag
+            window.scanComplete = false;
+            window.intentionalClose = false;
+            
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-            handleCTLQuery(formData);
+            
+            // Generate a timestamp for this scan
+            const timestamp = new Date().getTime();
+            formData.append('timestamp', timestamp);
+            
+            // Show progress section
+            const progressSection = document.getElementById('ctlProgressSection');
+            progressSection.style.display = 'block';
+            
+            const progressBar = document.getElementById('ctlProgressBar');
+            const statusText = document.getElementById('ctlStatusText');
+            statusText.textContent = 'Starting CT Log query...';
+            
+            // Clear previous results
+            const resultsTable = document.querySelector('#ctlResultsTable tbody');
+            resultsTable.innerHTML = '';
+            
+            // First send the form data via POST with better error handling
+            fetch('/query_ctl', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.error || `HTTP error! Status: ${response.status}`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Scan started:', data);
+                setupEventSource(data.timestamp);
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+                statusText.textContent = `Error: ${error.message}`;
+                progressBar.classList.add('bg-danger');
+            });
         });
 
         // Add this function to test SSE
@@ -1478,6 +1574,303 @@
 
         // You can call this from the browser console to test
         // testSSE();
+
+        // Add this to your file upload handler
+        document.getElementById('domainFile').addEventListener('change', function() {
+            const file = this.files[0];
+            if (file) {
+                // Check file size
+                if (file.size > 1024 * 1024) {  // If larger than 1MB
+                    alert('Warning: Large file detected. Processing may take some time and browser performance might be affected.');
+                }
+                
+                // Show the selected file name
+                const fileNameDisplay = document.getElementById('selectedFileName') || document.createElement('div');
+                fileNameDisplay.id = 'selectedFileName';
+                fileNameDisplay.className = 'mt-2';
+                fileNameDisplay.textContent = `Selected file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+                
+                if (!document.getElementById('selectedFileName')) {
+                    this.parentNode.appendChild(fileNameDisplay);
+                }
+            }
+        });
+
+        // First, let's add a direct event listener to all "Check Certificate Transparency Logs" buttons
+        document.addEventListener('DOMContentLoaded', function() {
+            // Find all buttons that might be used for file uploads
+            const allButtons = document.querySelectorAll('button');
+            
+            allButtons.forEach(button => {
+                if (button.textContent.includes('Check Certificate Transparency Logs')) {
+                    button.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        console.log('Certificate check button clicked');
+                        
+                        // Find the closest form to this button
+                        const form = this.closest('form');
+                        if (!form) {
+                            console.error('No parent form found');
+                            return;
+                        }
+                        
+                        // Find file input in this form
+                        const fileInput = form.querySelector('input[type="file"]');
+                        if (fileInput && fileInput.files.length > 0) {
+                            console.log('Processing file upload');
+                            processFileUpload(fileInput.files[0]);
+                        } else {
+                            // Check for textarea input
+                            const textarea = form.querySelector('textarea');
+                            if (textarea && textarea.value.trim()) {
+                                console.log('Processing manual input');
+                                processManualInput(textarea.value.trim());
+                            } else {
+                                alert('Please enter domains or select a file');
+                            }
+                        }
+                    });
+                }
+            });
+            
+            // Function to process file upload
+            function processFileUpload(file) {
+                console.log(`Processing file: ${file.name}, size: ${file.size} bytes`);
+                
+                // Reset scan state
+                window.scanComplete = false;
+                window.intentionalClose = false;
+                
+                // Create form data
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('timestamp', new Date().getTime());
+                
+                // Show progress UI
+                const progressSection = document.getElementById('ctlProgressSection');
+                if (progressSection) progressSection.style.display = 'block';
+                
+                const progressBar = document.getElementById('ctlProgressBar');
+                const statusText = document.getElementById('ctlStatusText');
+                if (statusText) statusText.textContent = 'Starting CT Log query...';
+                
+                // Clear previous results
+                const resultsTable = document.querySelector('#ctlResultsTable tbody');
+                if (resultsTable) resultsTable.innerHTML = '';
+                
+                // Send the request
+                fetch('/query_ctl', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(data => {
+                            throw new Error(data.error || `HTTP error! Status: ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Scan started:', data);
+                    setupEventSource(data.timestamp);
+                })
+                .catch(error => {
+                    console.error('Fetch error:', error);
+                    if (statusText) statusText.textContent = `Error: ${error.message}`;
+                    if (progressBar) progressBar.classList.add('bg-danger');
+                });
+            }
+            
+            // Function to process manual input
+            function processManualInput(domainsText) {
+                // Reset scan state
+                window.scanComplete = false;
+                window.intentionalClose = false;
+                
+                // Create form data
+                const formData = new FormData();
+                formData.append('targets', domainsText);
+                formData.append('timestamp', new Date().getTime());
+                
+                // Show progress UI
+                const progressSection = document.getElementById('ctlProgressSection');
+                if (progressSection) progressSection.style.display = 'block';
+                
+                const progressBar = document.getElementById('ctlProgressBar');
+                const statusText = document.getElementById('ctlStatusText');
+                if (statusText) statusText.textContent = 'Starting CT Log query...';
+                
+                // Clear previous results
+                const resultsTable = document.querySelector('#ctlResultsTable tbody');
+                if (resultsTable) resultsTable.innerHTML = '';
+                
+                // Send the request
+                fetch('/query_ctl', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(data => {
+                            throw new Error(data.error || `HTTP error! Status: ${response.status}`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Scan started:', data);
+                    setupEventSource(data.timestamp);
+                })
+                .catch(error => {
+                    console.error('Fetch error:', error);
+                    if (statusText) statusText.textContent = `Error: ${error.message}`;
+                    if (progressBar) progressBar.classList.add('bg-danger');
+                });
+            }
+            
+            // Function to set up EventSource
+            function setupEventSource(timestamp) {
+                const progressSection = document.getElementById('ctlProgressSection');
+                const progressBar = document.getElementById('ctlProgressBar');
+                const statusText = document.getElementById('ctlStatusText');
+                
+                // Close any existing EventSource
+                if (window.ctlEventSource) {
+                    window.ctlEventSource.close();
+                }
+                
+                // Create new EventSource
+                window.ctlEventSource = new EventSource(`/query_ctl?timestamp=${timestamp}`);
+                
+                window.ctlEventSource.onopen = function() {
+                    console.log('EventSource connection established');
+                };
+                
+                window.ctlEventSource.onmessage = function(event) {
+                    try {
+                        console.log('Received SSE message:', event.data);
+                        const data = JSON.parse(event.data);
+                        
+                        if (data.error) {
+                            if (statusText) statusText.textContent = `Error: ${data.error}`;
+                            return;
+                        }
+                        
+                        // Handle large domain set message
+                        if (data.is_large_set && data.message && progressSection) {
+                            const messageDiv = document.getElementById('largeDomainSetMessage') || 
+                                document.createElement('div');
+                            messageDiv.id = 'largeDomainSetMessage';
+                            messageDiv.className = 'alert alert-info mt-3';
+                            messageDiv.textContent = data.message;
+                            
+                            if (!document.getElementById('largeDomainSetMessage')) {
+                                progressSection.appendChild(messageDiv);
+                            }
+                        }
+                        
+                        // Update progress
+                        const progress = Math.round(data.progress || 0);
+                        if (progressBar) {
+                            progressBar.style.width = `${progress}%`;
+                            progressBar.textContent = `${progress}%`;
+                            progressBar.setAttribute('aria-valuenow', progress);
+                        }
+                        
+                        // Update status text
+                        if (statusText) {
+                            if (data.summary) {
+                                statusText.textContent = `Processing ${data.current_domain || 'unknown'} (${progress}%) - Found ${
+                                    data.summary.valid + data.summary.expiring_soon + data.summary.expired
+                                } certificates`;
+                            } else {
+                                statusText.textContent = `Processing ${data.current_domain || 'unknown'} (${progress}%)`;
+                            }
+                        }
+                        
+                        // Update results
+                        if (data.results && data.results.length > 0) {
+                            const resultsSection = document.getElementById('ctlResultsSection');
+                            if (resultsSection) resultsSection.style.display = 'block';
+                            
+                            if (typeof updateCTLResultsEfficiently === 'function' && data.is_large_set) {
+                                updateCTLResultsEfficiently(data.results);
+                            } else if (typeof updateCTLResults === 'function') {
+                                updateCTLResults(data.results);
+                            } else {
+                                // Fallback if update functions aren't defined
+                                const tbody = document.querySelector('#ctlResultsTable tbody');
+                                if (tbody) {
+                                    tbody.innerHTML = '';
+                                    data.results.forEach(result => {
+                                        const row = document.createElement('tr');
+                                        row.innerHTML = `
+                                            <td>${result.Domain || ''}</td>
+                                            <td>${result['Common Name'] || ''}</td>
+                                            <td>${result.Status || ''}</td>
+                                            <td>${result.Issuer || ''}</td>
+                                            <td>${result['Expiration Date'] || ''}</td>
+                                            <td>${result['Days Until Expiry'] || ''}</td>
+                                            <td>${result.Registrar || ''}</td>
+                                        `;
+                                        tbody.appendChild(row);
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Update summary
+                        if (data.summary && typeof updateCTLSummary === 'function') {
+                            updateCTLSummary(data.summary);
+                        }
+                        
+                        // Handle completion
+                        if (data.complete) {
+                            window.scanComplete = true;
+                            if (statusText) {
+                                statusText.textContent = data.stopped ? 
+                                    'Scan stopped by user.' : 
+                                    `CT Log query complete! Processed ${data.processed} domains with ${
+                                        (data.summary ? data.summary.valid + data.summary.expiring_soon + data.summary.expired : 0)
+                                    } certificates`;
+                            }
+                            if (progressBar) {
+                                progressBar.classList.remove('progress-bar-animated');
+                            }
+                            
+                            // Close the EventSource
+                            window.intentionalClose = true;
+                            window.ctlEventSource.close();
+                            window.ctlEventSource = null;
+                        }
+                    } catch (e) {
+                        console.error('Parse error:', e, event.data);
+                    }
+                };
+                
+                window.ctlEventSource.onerror = function(error) {
+                    console.error('EventSource error:', error);
+                    
+                    if (window.intentionalClose) {
+                        console.log('Connection closed intentionally');
+                        return;
+                    }
+                    
+                    if (!window.scanComplete) {
+                        console.log('Attempting to reconnect...');
+                        
+                        if (statusText && document.querySelector('#ctlResultsTable tbody')?.children.length === 0) {
+                            statusText.textContent = 'Connection interrupted. Attempting to reconnect...';
+                        }
+                    } else {
+                        window.intentionalClose = true;
+                        window.ctlEventSource.close();
+                        window.ctlEventSource = null;
+                    }
+                };
+            }
+        });
     </script>
 </body>
 </html>

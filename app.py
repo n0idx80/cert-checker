@@ -26,6 +26,7 @@ import whois
 import tldextract
 from queue import Queue, Empty
 import threading
+from functools import lru_cache
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
@@ -820,6 +821,10 @@ def query_ctl():
     else:  # POST request
         print("\n=== Starting CT Log Query ===", flush=True)
         
+        # Debug the request
+        print(f"Request form data: {request.form}", flush=True)
+        print(f"Request files: {request.files}", flush=True)
+        
         # Create a timestamp for this scan
         timestamp = request.form.get('timestamp', str(int(time.time() * 1000)))
         
@@ -834,11 +839,40 @@ def query_ctl():
         domains = []
         if 'file' in request.files:
             file = request.files['file']
-            file_data = file.read().decode('utf-8').splitlines()
-            domains = [d.strip() for d in file_data if d.strip()]
+            print(f"File received: {file.filename}, size: {file.content_length if hasattr(file, 'content_length') else 'unknown'}", flush=True)
+            
+            try:
+                file_data = file.read().decode('utf-8').splitlines()
+                print(f"Read {len(file_data)} lines from file", flush=True)
+                domains = [d.strip() for d in file_data if d.strip()]
+                print(f"Found {len(domains)} valid domains in file", flush=True)
+            except Exception as e:
+                print(f"Error reading file: {str(e)}", flush=True)
+                return jsonify({'error': f"Error reading file: {str(e)}"}), 400
         else:
             text_data = request.form.get('targets', '')
+            print(f"Text data received, length: {len(text_data)}", flush=True)
             domains = [d.strip() for d in text_data.splitlines() if d.strip()]
+            print(f"Found {len(domains)} valid domains in text data", flush=True)
+        
+        if not domains:
+            print("No valid domains found in request", flush=True)
+            return jsonify({'error': "No valid domains found in request"}), 400
+        
+        # Check if we have a large domain set
+        is_large_set = len(domains) > 500  # Consider sets larger than 500 as "large"
+        
+        # For large sets, send an initial message with the total count
+        if is_large_set:
+            initial_update = {
+                'progress': 0,
+                'current_domain': 'Preparing scan...',
+                'processed': 0,
+                'total': len(domains),
+                'is_large_set': True,
+                'message': f"Processing {len(domains)} domains. This may take some time."
+            }
+            result_queue.put(json.dumps(initial_update))
         
         # Start processing in a background thread
         def process_domains():
@@ -850,218 +884,261 @@ def query_ctl():
                 expiring_soon_count = 0
                 expired_count = 0
                 
-                # Function to get registrar info
-                def get_registrar_info(domain):
-                    try:
-                        # Extract the registered domain
-                        extracted = tldextract.extract(domain)
-                        registered_domain = f"{extracted.domain}.{extracted.suffix}"
-                        
-                        # Get WHOIS information
-                        w = whois.whois(registered_domain)
-                        registrar = w.registrar if hasattr(w, 'registrar') else 'Unknown'
-                        return registrar
-                    except Exception as e:
-                        print(f"Error getting registrar for {domain}: {str(e)}", flush=True)
-                        return "Unknown"
+                # For large sets, process in batches but send regular updates
+                batch_size = 50 if is_large_set else total
+                update_frequency = 10  # Send an update every 10 domains for large sets
                 
-                # Create a session with retries
-                def create_session():
-                    session = requests.Session()
-                    retries = Retry(
-                        total=5,
-                        backoff_factor=1.0,
-                        status_forcelist=[429, 500, 502, 503, 504],
-                        allowed_methods=["GET", "POST"]
-                    )
-                    session.mount('https://', HTTPAdapter(max_retries=retries))
-                    return session
-                
-                for domain in domains:
-                    try:
-                        print(f"Processing domain: {domain}", flush=True)
-                        session = create_session()
-                        
-                        # Add a delay between requests to avoid overwhelming crt.sh
-                        time.sleep(1.5)
-                        
-                        url = f"https://crt.sh/?q={domain}&output=json"
-                        
+                # Process domains in batches
+                for i in range(0, total, batch_size):
+                    batch = domains[i:i+batch_size]
+                    
+                    # Process each domain in the batch
+                    for idx, domain in enumerate(batch):
                         try:
-                            response = session.get(url, timeout=45)
-                            response.raise_for_status()
+                            print(f"Processing domain: {domain}", flush=True)
+                            session = create_session()
                             
-                            # Check if response is valid JSON
+                            # Add a delay between requests to avoid overwhelming crt.sh
+                            time.sleep(1.5)
+                            
+                            url = f"https://crt.sh/?q={domain}&output=json"
+                            
                             try:
-                                certs = response.json()
-                            except json.JSONDecodeError:
-                                print(f"Invalid JSON response for {domain}", flush=True)
-                                certs = []
+                                response = session.get(url, timeout=45)
+                                response.raise_for_status()
                                 
-                        except requests.exceptions.HTTPError as http_err:
-                            if response.status_code == 503:
-                                # Special handling for 503 errors
-                                error_msg = f"crt.sh service temporarily unavailable (503) for {domain}. Try again later."
-                                print(error_msg, flush=True)
-                                
-                                # Add a dummy result to show the error
-                                all_results.append({
-                                    'Domain': domain,
-                                    'Common Name': 'Error',
-                                    'Status': 'Error',
-                                    'Issuer': 'N/A',
-                                    'Expiration Date': 'N/A',
-                                    'Days Until Expiry': 'N/A',
-                                    'Registrar': 'N/A'
-                                })
-                                
-                                processed += 1
-                                progress = (processed / total) * 100
-                                
-                                update = {
-                                    'progress': progress,
-                                    'current_domain': domain,
-                                    'processed': processed,
-                                    'total': total,
-                                    'results': all_results,
-                                    'summary': {
-                                        'total': total,
+                                # Check if response is valid JSON
+                                try:
+                                    certs = response.json()
+                                except json.JSONDecodeError:
+                                    print(f"Invalid JSON response for {domain}", flush=True)
+                                    certs = []
+                                    
+                            except requests.exceptions.HTTPError as http_err:
+                                if response.status_code == 503:
+                                    # Special handling for 503 errors
+                                    error_msg = f"crt.sh service temporarily unavailable (503) for {domain}. Try again later."
+                                    print(error_msg, flush=True)
+                                    
+                                    # Add a dummy result to show the error
+                                    all_results.append({
+                                        'Domain': domain,
+                                        'Common Name': 'Error',
+                                        'Status': 'Error',
+                                        'Issuer': 'N/A',
+                                        'Expiration Date': 'N/A',
+                                        'Days Until Expiry': 'N/A',
+                                        'Registrar': 'N/A'
+                                    })
+                                    
+                                    processed += 1
+                                    progress = (processed / total) * 100
+                                    
+                                    update = {
+                                        'progress': progress,
+                                        'current_domain': domain,
                                         'processed': processed,
-                                        'valid': valid_count,
-                                        'expiring_soon': expiring_soon_count,
-                                        'expired': expired_count
-                                    },
-                                    'complete': (processed == total),
-                                    'error': error_msg
-                                }
+                                        'total': total,
+                                        'results': all_results,
+                                        'summary': {
+                                            'total': total,
+                                            'processed': processed,
+                                            'valid': valid_count,
+                                            'expiring_soon': expiring_soon_count,
+                                            'expired': expired_count
+                                        },
+                                        'complete': (processed == total),
+                                        'error': error_msg
+                                    }
+                                    
+                                    # Put the update in the queue
+                                    result_queue.put(json.dumps(update))
+                                    continue
+                                else:
+                                    # Re-raise other HTTP errors
+                                    raise
+                            
+                            # Process certificates if we got a valid response
+                            domain_results = []
+                            
+                            # Get registrar info
+                            try:
+                                registrar = get_registrar_info(domain)
+                            except Exception as e:
+                                print(f"Error getting registrar for {domain}: {str(e)}", flush=True)
+                                registrar = "Unknown"
+                            
+                            for cert in certs:
+                                try:
+                                    not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
+                                    not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
+                                    now = datetime.now()
+                                    days_until_expiry = (not_after - now).days
+                                    
+                                    if now > not_after:
+                                        status = 'Expired'
+                                        priority = 1
+                                        expired_count += 1
+                                    elif now < not_before:
+                                        status = 'Not Yet Valid'
+                                        priority = 4
+                                    else:
+                                        if days_until_expiry <= 90:
+                                            status = 'Expiring Soon'
+                                            priority = 2
+                                            expiring_soon_count += 1
+                                        else:
+                                            status = 'Valid'
+                                            priority = 3
+                                            valid_count += 1
+                                    
+                                    result = {
+                                        'Domain': domain,
+                                        'Common Name': cert.get('common_name', 'Unknown'),
+                                        'Status': status,
+                                        'Issuer': cert.get('issuer_name', 'Unknown'),
+                                        'Expiration Date': not_after.strftime('%Y-%m-%d'),
+                                        'Days Until Expiry': str(days_until_expiry),
+                                        'Registrar': registrar,
+                                        'priority': priority,
+                                        'expiry_timestamp': not_after.timestamp()
+                                    }
+                                    domain_results.append(result)
+                                    
+                                except Exception as e:
+                                    print(f"Error processing certificate: {str(e)}", flush=True)
+                                    continue
+                            
+                            # Sort domain results
+                            domain_results.sort(key=lambda x: (
+                                x['priority'], 
+                                -x['expiry_timestamp'] if x['priority'] == 1 else x['expiry_timestamp']
+                            ))
+                            
+                            # Remove sorting fields
+                            for result in domain_results:
+                                del result['priority']
+                                del result['expiry_timestamp']
+                            
+                            all_results.extend(domain_results)
+                            
+                            processed += 1
+                            progress = (processed / total) * 100
+                            
+                            # Create summary stats
+                            summary = {
+                                'total': total,
+                                'processed': processed,
+                                'valid': valid_count,
+                                'expiring_soon': expiring_soon_count,
+                                'expired': expired_count
+                            }
+                            
+                            # For large sets, we should still send regular updates
+                            # but limit the full results to avoid browser performance issues
+                            should_send_update = (
+                                processed % update_frequency == 0 or  # Regular updates
+                                processed == 1 or                     # First domain
+                                processed == total or                 # Last domain
+                                idx == len(batch) - 1                 # Last in batch
+                            )
+                            
+                            if should_send_update:
+                                if is_large_set and len(all_results) > 1000:
+                                    # For large sets, keep only the most recent/important results
+                                    # This prevents the browser from being overwhelmed
+                                    important_results = []
+                                    
+                                    # Keep expired and expiring soon certificates
+                                    for res in all_results:
+                                        if res.get('Status', '').startswith('Expired') or res.get('Status', '').startswith('Expiring Soon'):
+                                            important_results.append(res)
+                                    
+                                    # If we don't have enough important results, add some of the most recent ones
+                                    if len(important_results) < 1000:
+                                        # Add the most recent results to fill up to 1000
+                                        recent_results = all_results[-min(1000 - len(important_results), len(all_results)):]
+                                        important_results.extend([r for r in recent_results if r not in important_results])
+                                    
+                                    # Send update with limited results but full summary
+                                    update = {
+                                        'progress': progress,
+                                        'current_domain': domain,
+                                        'processed': processed,
+                                        'total': total,
+                                        'results': important_results[:1000],  # Limit to 1000 results
+                                        'summary': summary,
+                                        'complete': (processed == total),
+                                        'is_large_set': True,
+                                        'message': f"Processed {processed}/{total} domains. Showing important and recent results."
+                                    }
+                                else:
+                                    # Send full results for smaller sets
+                                    update = {
+                                        'progress': progress,
+                                        'current_domain': domain,
+                                        'processed': processed,
+                                        'total': total,
+                                        'results': all_results,
+                                        'summary': summary,
+                                        'complete': (processed == total)
+                                    }
                                 
                                 # Put the update in the queue
                                 result_queue.put(json.dumps(update))
-                                continue
-                            else:
-                                # Re-raise other HTTP errors
-                                raise
-                        
-                        # Process certificates if we got a valid response
-                        domain_results = []
-                        
-                        # Get registrar info
-                        try:
-                            registrar = get_registrar_info(domain)
+                            
                         except Exception as e:
-                            print(f"Error getting registrar for {domain}: {str(e)}", flush=True)
-                            registrar = "Unknown"
+                            print(f"Error processing domain {domain}: {str(e)}", flush=True)
+                            # Send error update
+                            error_update = {
+                                'error': f"Error processing {domain}: {str(e)}",
+                                'progress': (processed / total) * 100,
+                                'current_domain': domain,
+                                'processed': processed,
+                                'total': total
+                            }
+                            result_queue.put(json.dumps(error_update))
+                            continue
+                
+                # Final statistics
+                try:
+                    total_time = time.time() - start_time
+                    print(f"\n=== Scan Complete ===", flush=True)
+                    print(f"Total time: {total_time:.2f} seconds", flush=True)
+                    print(f"Total IPs/Domains processed: {processed}", flush=True)
+                    print(f"Total certificates found: {valid_count + expiring_soon_count + expired_count}", flush=True)
+                    
+                    # Add checks to prevent division by zero and invalid calculations
+                    if total_time > 0 and processed > 0:
+                        print(f"Average rate: {processed/total_time:.2f} targets/sec", flush=True)
+                        print(f"Average certificates per target: {(valid_count + expiring_soon_count + expired_count)/processed:.2f}", flush=True)
+                    else:
+                        if processed == 0:
+                            print("No targets were processed successfully", flush=True)
+                        else:
+                            print("Scan completed too quickly to measure rate", flush=True)
                         
-                        for cert in certs:
-                            try:
-                                not_after = datetime.strptime(cert['not_after'], '%Y-%m-%dT%H:%M:%S')
-                                not_before = datetime.strptime(cert['not_before'], '%Y-%m-%dT%H:%M:%S')
-                                now = datetime.now()
-                                days_until_expiry = (not_after - now).days
-                                
-                                if now > not_after:
-                                    status = 'Expired'
-                                    priority = 1
-                                    expired_count += 1
-                                elif now < not_before:
-                                    status = 'Not Yet Valid'
-                                    priority = 4
-                                else:
-                                    if days_until_expiry <= 90:
-                                        status = 'Expiring Soon'
-                                        priority = 2
-                                        expiring_soon_count += 1
-                                    else:
-                                        status = 'Valid'
-                                        priority = 3
-                                        valid_count += 1
-                                
-                                result = {
-                                    'Domain': domain,
-                                    'Common Name': cert.get('common_name', 'Unknown'),
-                                    'Status': status,
-                                    'Issuer': cert.get('issuer_name', 'Unknown'),
-                                    'Expiration Date': not_after.strftime('%Y-%m-%d'),
-                                    'Days Until Expiry': str(days_until_expiry),
-                                    'Registrar': registrar,
-                                    'priority': priority,
-                                    'expiry_timestamp': not_after.timestamp()
-                                }
-                                domain_results.append(result)
-                                
-                            except Exception as e:
-                                print(f"Error processing certificate: {str(e)}", flush=True)
-                                continue
-                        
-                        # Sort domain results
-                        domain_results.sort(key=lambda x: (
-                            x['priority'], 
-                            -x['expiry_timestamp'] if x['priority'] == 1 else x['expiry_timestamp']
-                        ))
-                        
-                        # Remove sorting fields
-                        for result in domain_results:
-                            del result['priority']
-                            del result['expiry_timestamp']
-                        
-                        all_results.extend(domain_results)
-                        
-                        processed += 1
-                        progress = (processed / total) * 100
-                        
-                        # Create summary stats
-                        summary = {
+                except Exception as e:
+                    print(f"Error calculating final statistics: {str(e)}", flush=True)
+                
+                # Send final update if there are remaining results
+                if all_results:
+                    final_update = {
+                        'progress': 100,
+                        'current_domain': 'Complete',
+                        'processed': processed,
+                        'total': total,
+                        'results': all_results,
+                        'summary': {
                             'total': total,
                             'processed': processed,
                             'valid': valid_count,
                             'expiring_soon': expiring_soon_count,
                             'expired': expired_count
-                        }
-                        
-                        # Send update
-                        update = {
-                            'progress': progress,
-                            'current_domain': domain,
-                            'processed': processed,
-                            'total': total,
-                            'results': all_results,
-                            'summary': summary,
-                            'complete': (processed == total)
-                        }
-                        
-                        # Put the update in the queue
-                        result_queue.put(json.dumps(update))
-                        
-                    except Exception as e:
-                        print(f"Error processing domain {domain}: {str(e)}", flush=True)
-                        # Send error update
-                        error_update = {
-                            'error': f"Error processing {domain}: {str(e)}",
-                            'progress': (processed / total) * 100,
-                            'current_domain': domain,
-                            'processed': processed,
-                            'total': total
-                        }
-                        result_queue.put(json.dumps(error_update))
-                        continue
-                
-                # Send final update
-                final_update = {
-                    'progress': 100,
-                    'current_domain': 'Complete',
-                    'processed': total,
-                    'total': total,
-                    'results': all_results,
-                    'summary': {
-                        'total': total,
-                        'processed': total,
-                        'valid': valid_count,
-                        'expiring_soon': expiring_soon_count,
-                        'expired': expired_count
-                    },
-                    'complete': True
-                }
-                result_queue.put(json.dumps(final_update))
+                        },
+                        'complete': True
+                    }
+                    result_queue.put(json.dumps(final_update))
                 
                 # Put an end marker in the queue
                 result_queue.put("END")
@@ -1150,6 +1227,48 @@ def debug_ctl():
     url = f"https://crt.sh/?q={domain}&output=json"
     response = session.get(url, timeout=30)
     return jsonify(response.json())
+
+# Add a cache and rate limiting to the WHOIS lookups
+# Cache up to 1000 most recent lookups
+@lru_cache(maxsize=1000)
+def get_registrar_info(domain):
+    try:
+        # Extract the registered domain
+        extracted = tldextract.extract(domain)
+        registered_domain = f"{extracted.domain}.{extracted.suffix}"
+        
+        if not registered_domain or registered_domain == ".":
+            print(f"Invalid domain format for WHOIS lookup: {domain}", flush=True)
+            return "Unknown"
+        
+        # Add a small delay to avoid rate limiting
+        time.sleep(0.5)
+        
+        # Use whois without the timeout parameter
+        w = whois.whois(registered_domain)
+        
+        # Check for different possible registrar field names
+        registrar = None
+        for field in ['registrar', 'registrant', 'org', 'organization', 'registrant_org']:
+            if hasattr(w, field) and getattr(w, field):
+                registrar = getattr(w, field)
+                if isinstance(registrar, list) and registrar:
+                    registrar = registrar[0]  # Take the first one if it's a list
+                break
+        
+        # If we still don't have a registrar, try the raw data
+        if not registrar and hasattr(w, 'text') and w.text:
+            # Try to extract registrar from raw text
+            text = w.text.lower()
+            if 'registrar:' in text:
+                registrar_line = [line for line in text.split('\n') if 'registrar:' in line.lower()]
+                if registrar_line:
+                    registrar = registrar_line[0].split('registrar:', 1)[1].strip()
+        
+        return registrar if registrar else "Unknown"
+    except Exception as e:
+        print(f"Error getting registrar for {domain}: {str(e)}", flush=True)
+        return "Unknown"
 
 if __name__ == '__main__':
     app.run(debug=True) 
